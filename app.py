@@ -75,6 +75,8 @@ def handle_message(event):
                 "!<keyword> - Tra cứu thông tin"
             )
 
+            if not text or text.strip() == "":
+    text = "Không có dữ liệu trả về."
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
