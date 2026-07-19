@@ -3,7 +3,7 @@ import gspread
 import json
 
 from google.oauth2.service_account import Credentials
-
+from gspread.exceptions import WorksheetNotFound
 from config import GOOGLE_SHEET_ID
 from config import GOOGLE_SERVICE_ACCOUNT
 from config import CACHE_TIME
@@ -82,3 +82,63 @@ def reload():
     _last_update = 0
 
     return load_sheet()
+    # ==============================
+# USERS SHEET
+# ==============================
+
+def get_users_sheet():
+
+    sheet = client.open_by_key(GOOGLE_SHEET_ID)
+
+    try:
+        return sheet.worksheet("Users")
+
+    except WorksheetNotFound:
+
+        ws = sheet.add_worksheet(
+            title="Users",
+            rows=1000,
+            cols=2
+        )
+
+        ws.update("A1:B1", [["DisplayName", "UserId"]])
+
+        return ws
+
+
+def save_user(display_name, user_id):
+
+    if not display_name or not user_id:
+        return
+
+    ws = get_users_sheet()
+
+    rows = ws.get_all_records()
+
+    for idx, row in enumerate(rows, start=2):
+
+        if row.get("UserId") == user_id:
+
+            ws.update(
+                f"A{idx}:B{idx}",
+                [[display_name, user_id]]
+            )
+
+            return
+
+    ws.append_row([display_name, user_id])
+
+
+def get_user_id(display_name):
+
+    ws = get_users_sheet()
+
+    rows = ws.get_all_records()
+
+    for row in rows:
+
+        if row["DisplayName"].strip().lower() == display_name.strip().lower():
+
+            return row["UserId"]
+
+    return None
