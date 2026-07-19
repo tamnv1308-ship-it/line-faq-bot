@@ -14,7 +14,7 @@ CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "")
 
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 
-GOOGLE_SERVICE_ACCOUNT = "service_account.json"
+GOOGLE_SERVICE_ACCOUNT = "line-faq-bot-502902-ae992a0235d9.json"
 
 # ============================
 # BOT
