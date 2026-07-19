@@ -9,7 +9,7 @@ from config import GOOGLE_SERVICE_ACCOUNT
 from config import CACHE_TIME
 
 scope = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly"
+    "https://www.googleapis.com/auth/spreadsheets"
 ]
 
 credentials = Credentials.from_service_account_info(
