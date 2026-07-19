@@ -99,7 +99,7 @@ except Exception as e:
             )
 
             if not text or text.strip() == "":
-    text = "Không có dữ liệu trả về."
+                    text = "Không có dữ liệu trả về."
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
