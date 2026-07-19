@@ -1,5 +1,5 @@
 from flask import Flask, request, abort
-ffrom linebot.v3 import WebhookHandler
+from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
@@ -43,14 +43,14 @@ def callback():
     return "OK"
 
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
+if __name__ == "__main__":
 
     user_text = event.message.text.strip()
 
     # =========================
     # SAVE USER
     # =========================
+
     try:
 
         user_id = event.source.user_id
@@ -66,12 +66,9 @@ def handle_message(event):
                 user_id
             )
 
-    except Exception as e:
-        print("Save User:", e)
+  except Exception as e:
 
-    # ===== Từ đây mới là code cũ =====
+    print("Save User:", e)
 
-    if not user_text.startswith(config.BOT_PREFIX):
-        return
-
-    command = user_text[len(config.BOT_PREFIX):].strip()
+if not user_text.startswith(config.BOT_PREFIX):
+    return
