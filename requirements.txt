@@ -1,0 +1,8 @@
+Flask==3.0.3
+gunicorn==22.0.0
+line-bot-sdk==3.11.0
+gspread==6.1.2
+google-auth==2.35.0
+requests==2.32.3
+python-dotenv==1.0.1
+rapidfuzz==3.9.7
