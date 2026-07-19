@@ -87,9 +87,10 @@ def handle_message(event):
     command = user_text[len(config.BOT_PREFIX):].strip()
 
     text = ""
+
         # ==========================
-    # HELP
-    # ==========================
+        # HELP
+        # ==========================
 
     if command.lower() == "help":
 
@@ -161,7 +162,8 @@ Ví dụ
         except Exception as e:
 
             text = f"Lỗi:\n{e}"
-                # ==========================
+
+    # ==========================
     # SEARCH
     # ==========================
 
@@ -182,7 +184,7 @@ Ví dụ
 
                 text = result
 
-        except Exception as e:
+            except Exception as e:
 
             text = f"Lỗi:\n{e}"
 
@@ -190,7 +192,7 @@ Ví dụ
     # REPLY
     # ==========================
 
-    try:
+            try:
 
         with ApiClient(configuration) as api_client:
 
