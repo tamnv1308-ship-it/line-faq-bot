@@ -18,6 +18,7 @@ from linebot.v3.messaging import (
 import config
 import sheets
 
+
 app = Flask(__name__)
 
 configuration = Configuration(
@@ -36,14 +37,11 @@ def home():
 
 @app.route("/callback", methods=["POST"])
 def callback():
-
     signature = request.headers.get("X-Line-Signature")
-
     body = request.get_data(as_text=True)
 
     try:
         handler.handle(body, signature)
-
     except InvalidSignatureError:
         abort(400)
 
@@ -55,7 +53,6 @@ def callback():
     message=TextMessageContent
 )
 def handle_message(event):
-
     user_text = event.message.text.strip()
 
     # ==========================
@@ -63,13 +60,10 @@ def handle_message(event):
     # ==========================
 
     try:
-
         user_id = event.source.user_id
 
         with ApiClient(configuration) as api_client:
-
             bot = MessagingApi(api_client)
-
             profile = bot.get_profile(user_id)
 
             sheets.save_user(
@@ -78,22 +72,20 @@ def handle_message(event):
             )
 
     except Exception as e:
+        print("Save User Error:", e)
 
-        print("Save User:", e)
-
+    # Nếu tin nhắn không bắt đầu bằng prefix thì bỏ qua
     if not user_text.startswith(config.BOT_PREFIX):
         return
 
     command = user_text[len(config.BOT_PREFIX):].strip()
-
     text = ""
 
-        # ==========================
-        # HELP
-        # ==========================
+    # ==========================
+    # HELP
+    # ==========================
 
     if command.lower() == "help":
-
         text = f"""
 🤖 {config.BOT_NAME}
 
@@ -123,99 +115,74 @@ Ví dụ
     # ==========================
 
     elif command.lower() == "list":
-
         try:
-
             data = sheets.load_sheet()
 
             if len(data) == 0:
-
                 text = "Chưa có keyword."
-
             else:
-
                 keys = sorted(data.keys())
 
                 text = "📚 Danh sách keyword\n\n"
-
                 text += "\n".join(
                     f"• {k}" for k in keys
                 )
 
         except Exception as e:
-
             text = f"Lỗi:\n{e}"
-
 
     # ==========================
     # RELOAD
     # ==========================
 
     elif command.lower() == "reload":
-
         try:
-
             sheets.reload()
-
             text = "✅ Đã reload dữ liệu thành công."
 
         except Exception as e:
-
             text = f"Lỗi:\n{e}"
 
     # ==========================
-    # SEARCH
+    # SEARCH KEYWORD
     # ==========================
 
     else:
-
         try:
-
             result = sheets.search(command)
 
             if result is None:
-
                 text = (
                     f"❌ Không tìm thấy keyword:\n"
                     f"{command}"
                 )
-
             else:
-
                 text = result
 
-            except Exception as e:
-
+        except Exception as e:
             text = f"Lỗi:\n{e}"
 
     # ==========================
-    # REPLY
+    # REPLY MESSAGE
     # ==========================
 
-            try:
-
+    try:
         with ApiClient(configuration) as api_client:
+            bot = MessagingApi(api_client)
 
-            MessagingApi(api_client).reply_message(
-
+            bot.reply_message(
                 ReplyMessageRequest(
-
                     reply_token=event.reply_token,
-
                     messages=[
-
                         TextMessage(
                             text=text
                         )
-
                     ]
-
                 )
-
             )
 
-except Exception as e:
-    print("Reply Error:", e)
+    except Exception as e:
+        print("Reply Error:", e)
 
 
 if __name__ == "__main__":
