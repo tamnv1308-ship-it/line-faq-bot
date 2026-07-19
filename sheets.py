@@ -1,5 +1,6 @@
 import time
 import gspread
+import json
 
 from google.oauth2.service_account import Credentials
 
@@ -11,8 +12,8 @@ scope = [
     "https://www.googleapis.com/auth/spreadsheets.readonly"
 ]
 
-credentials = Credentials.from_service_account_file(
-    GOOGLE_SERVICE_ACCOUNT,
+credentials = Credentials.from_service_account_info(
+    json.loads(GOOGLE_SERVICE_ACCOUNT),
     scopes=scope
 )
 
