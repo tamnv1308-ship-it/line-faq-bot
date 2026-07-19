@@ -1,5 +1,6 @@
 from flask import Flask, request, abort
-
+from linebot.v3.messaging import MessagingApiBlob
+from linebot.v3.messaging import ApiClient
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
@@ -47,6 +48,28 @@ def callback():
 def handle_message(event):
 
     user_text = event.message.text.strip()
+    # =========================
+# SAVE USER
+# =========================
+
+try:
+
+    user_id = event.source.user_id
+
+    with ApiClient(configuration) as api_client:
+
+        line_bot_api = MessagingApi(api_client)
+
+        profile = line_bot_api.get_profile(user_id)
+
+        sheets.save_user(
+            profile.display_name,
+            user_id
+        )
+
+except Exception as e:
+
+    print("Save User:", e)
 
     if not user_text.startswith(config.BOT_PREFIX):
         return
