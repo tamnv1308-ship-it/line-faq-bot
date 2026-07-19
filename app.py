@@ -212,7 +212,7 @@ Ví dụ
 
             )
 
- except Exception as e:
+except Exception as e:
     print("Reply Error:", e)
 
 
@@ -227,5 +227,3 @@ if __name__ == "__main__":
         port=5000,
         debug=False
     )
-               debug=False
-           )
