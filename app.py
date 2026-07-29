@@ -1,5 +1,3 @@
-import time
-
 from flask import Flask, request, abort
 
 from linebot.v3 import WebhookHandler
@@ -23,11 +21,9 @@ configuration = Configuration(
     access_token=config.CHANNEL_ACCESS_TOKEN
 )
 
-handler = WebhookHandler(config.CHANNEL_SECRET)
-
-# Không gọi LINE + Google Sheet liên tục cho cùng một người
-user_save_cache = {}
-USER_SAVE_CACHE_TIME = 6 * 60 * 60
+handler = WebhookHandler(
+    config.CHANNEL_SECRET
+)
 
 
 @app.route("/")
@@ -42,55 +38,56 @@ def callback():
 
     try:
         handler.handle(body, signature)
+
     except InvalidSignatureError:
         abort(400)
 
     return "OK"
 
 
-def save_user_if_needed(event):
-    """Lưu thông tin user, nhưng không lưu lặp lại liên tục."""
+def reply_text(reply_token, text):
     try:
-        user_id = event.source.user_id
-        now = time.time()
-
-        if now - user_save_cache.get(user_id, 0) < USER_SAVE_CACHE_TIME:
-            return
-
         with ApiClient(configuration) as api_client:
-            bot = MessagingApi(api_client)
-
-            # Dùng cho group LINE
-            group_id = getattr(event.source, "group_id", None)
-            room_id = getattr(event.source, "room_id", None)
-
-            if group_id:
-                profile = bot.get_group_member_profile(group_id, user_id)
-            elif room_id:
-                profile = bot.get_room_member_profile(room_id, user_id)
-            else:
-                profile = bot.get_profile(user_id)
-
-            sheets.save_user(profile.display_name, user_id)
-            user_save_cache[user_id] = now
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[
+                        TextMessage(text=text)
+                    ]
+                )
+            )
 
     except Exception as e:
-        print("Save User Error:", e)
+        print("Reply Error:", e)
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
+    user_text_lower = user_text.lower()
 
-    # Bot chỉ xử lý lệnh bắt đầu bằng !
+    # Bot chỉ phản hồi khi được gọi đúng câu này
+    if user_text_lower in [
+        "bot ơi",
+        "bot oi",
+        "ê bot",
+        "hey bot",
+    ]:
+        reply_text(
+            event.reply_token,
+            f"Dạ, em nghe đây.\n\nGõ {config.BOT_PREFIX}help để xem các lệnh."
+        )
+        return
+
+    # Tin nhắn không phải lệnh thì bỏ qua
     if not user_text.startswith(config.BOT_PREFIX):
         return
 
     command = user_text[len(config.BOT_PREFIX):].strip()
     command_lower = command.lower()
-    text = ""
 
-    if command_lower == "help":
+    # HELP
+    if command_lower in ["help", ""]:
         text = f"""
 {config.BOT_NAME}
 
@@ -115,20 +112,26 @@ Ví dụ
 {config.BOT_PREFIX}macbook
 """.strip()
 
+    # LIST
     elif command_lower == "list":
         try:
             data = sheets.load_sheet()
 
             if not data:
                 text = "Chưa có keyword."
+
             else:
                 keys = sorted(data.keys())
+
                 text = "Danh sách keyword\n\n"
-                text += "\n".join(f"• {key}" for key in keys)
+                text += "\n".join(
+                    f"• {key}" for key in keys
+                )
 
         except Exception as e:
             text = f"Lỗi:\n{e}"
 
+    # RELOAD
     elif command_lower == "reload":
         try:
             sheets.reload()
@@ -137,6 +140,7 @@ Ví dụ
         except Exception as e:
             text = f"Lỗi:\n{e}"
 
+    # SEARCH KEYWORD
     else:
         try:
             result = sheets.search(command)
@@ -144,30 +148,16 @@ Ví dụ
             if result is None:
                 text = (
                     f"Không tìm thấy keyword:\n{command}\n\n"
-                    f"Xem danh sách bằng lệnh {config.BOT_PREFIX}list"
+                    f"Gõ {config.BOT_PREFIX}list để xem danh sách keyword."
                 )
+
             else:
                 text = result
 
         except Exception as e:
             text = f"Lỗi:\n{e}"
 
-    # Trả lời trước để người trong group không phải chờ
-    try:
-        with ApiClient(configuration) as api_client:
-            MessagingApi(api_client).reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=text)]
-                )
-            )
-
-    except Exception as e:
-        print("Reply Error:", e)
-        return
-
-    # Lưu sau khi đã gửi câu trả lời
-    save_user_if_needed(event)
+    reply_text(event.reply_token, text)
 
 
 if __name__ == "__main__":
