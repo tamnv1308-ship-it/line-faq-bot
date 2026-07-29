@@ -125,7 +125,11 @@ def handle_message(event):
         "bot ơi",
         "bot oi",
         "ê bot",
-        "hey bot",
+        "lol bot",
+        "di bot",
+        "đĩ bot",
+        "bot đâu",
+        "bot dau",
     ]:
         text = random.choice(GREETING_MESSAGES)
         text += (
