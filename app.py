@@ -49,8 +49,7 @@ HELP_OPENINGS = [
 HELP_CLOSINGS = [
     "💬 Mình cứ gửi câu lệnh, em tìm giúp ngay.",
     "⚡ Gõ đúng keyword là em trả lời liền ạ.",
-    f"📋 Nếu chưa biết tìm gì, mình thử gõ {config.BOT_PREFIX}list nhé.",
-    "🌈 Em luôn sẵn sàng hỗ trợ trong group.",
+    f"🌈 Em luôn sẵn sàng hỗ trợ trong group.",
 ]
 
 LIST_OPENINGS = [
