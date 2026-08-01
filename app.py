@@ -1,5 +1,7 @@
 import random
 
+from zoneinfo import ZoneInfo
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, request, abort
 
 from linebot.v3 import WebhookHandler
@@ -97,6 +99,23 @@ def send_group_reminder():
 
     except Exception as e:
         print("Reminder Error:", e)
+
+
+scheduler = BackgroundScheduler(
+    timezone=ZoneInfo("Asia/Ho_Chi_Minh")
+)
+
+scheduler.add_job(
+    send_group_reminder,
+    trigger="cron",
+    hour=9,
+    minute=0,
+    id="morning_reminder",
+    replace_existing=True,
+    max_instances=1
+)
+
+scheduler.start()
 
 
 @app.route("/")
