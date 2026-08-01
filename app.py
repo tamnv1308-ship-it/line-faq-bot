@@ -10,6 +10,7 @@ from linebot.v3.messaging import (
     ApiClient,
     MessagingApi,
     ReplyMessageRequest,
+    PushMessageRequest,
     TextMessage,
 )
 
@@ -29,55 +30,73 @@ handler = WebhookHandler(
 
 
 GREETING_MESSAGES = [
-    "Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
-    "Em đây ạ.\n\nMình muốn tìm thông tin nào nè?",
-    "Dạ có em.\n\nMình gõ keyword để em tìm giúp nhé.",
-    "Em sẵn sàng đây.\n\nMình cần tra cứu nội dung gì ạ?",
-    "Dạ, em có mặt.\n\nGõ lệnh hoặc keyword, em hỗ trợ mình ngay.",
+    "👋 Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
+    "🙋 Em đây ạ.\n\nMình muốn tìm thông tin nào nè?",
+    "✨ Dạ có em.\n\nMình gõ keyword để em tìm giúp nhé.",
+    "🌟 Em sẵn sàng đây.\n\nMình cần tra cứu nội dung gì ạ?",
+    "📩 Dạ, em có mặt.\n\nGõ lệnh hoặc keyword, em hỗ trợ mình ngay.",
 ]
 
 HELP_OPENINGS = [
-    f"{config.BOT_NAME} xin chào.",
-    f"Dạ, đây là phần hướng dẫn của {config.BOT_NAME}.",
-    f"Em gửi mình các lệnh đang sử dụng được nhé.",
-    f"Mình có thể dùng các lệnh sau để tra cứu nhanh.",
+    f"🤖 {config.BOT_NAME} xin chào.",
+    f"📚 Dạ, đây là phần hướng dẫn của {config.BOT_NAME}.",
+    "📝 Em gửi mình các lệnh đang sử dụng được nhé.",
+    "🔎 Mình có thể dùng các lệnh sau để tra cứu nhanh.",
 ]
 
 HELP_CLOSINGS = [
-    "Mình cứ gửi câu lệnh, em tìm giúp ngay.",
-    "Gõ đúng keyword là em trả lời liền ạ.",
-    "Nếu chưa biết tìm gì, mình thử gõ !list nhé.",
-    "Em luôn sẵn sàng hỗ trợ trong group.",
+    "💬 Mình cứ gửi câu lệnh, em tìm giúp ngay.",
+    "⚡ Gõ đúng keyword là em trả lời liền ạ.",
+    f"📋 Nếu chưa biết tìm gì, mình thử gõ {config.BOT_PREFIX}list nhé.",
+    "🌈 Em luôn sẵn sàng hỗ trợ trong group.",
 ]
 
 LIST_OPENINGS = [
-    "Danh sách keyword hiện có đây ạ.",
-    "Em tìm được các keyword này.",
-    "Mình có thể tra cứu bằng những keyword bên dưới.",
-    "Đây là các nội dung bot đang hỗ trợ.",
+    "📚 Danh sách keyword hiện có đây ạ.",
+    "🔎 Em tìm được các keyword này.",
+    "🗂️ Mình có thể tra cứu bằng những keyword bên dưới.",
+    "✨ Đây là các nội dung bot đang hỗ trợ.",
 ]
 
 ANSWER_OPENINGS = [
-    "Em tìm được thông tin này.",
-    "Dạ, nội dung mình cần đây ạ.",
-    "Em gửi mình câu trả lời nhé.",
-    "Thông tin tra cứu của mình đây.",
-    "Em đã tìm thấy nội dung phù hợp.",
+    "✅ Em tìm được thông tin này.",
+    "📌 Dạ, nội dung mình cần đây ạ.",
+    "💬 Em gửi mình câu trả lời nhé.",
+    "🔍 Thông tin tra cứu của mình đây.",
+    "✨ Em đã tìm thấy nội dung phù hợp.",
 ]
 
 NOT_FOUND_MESSAGES = [
-    "Em chưa tìm thấy keyword này.",
-    "Keyword này hiện chưa có trong dữ liệu của em.",
-    "Em chưa thấy nội dung phù hợp với keyword này.",
-    "Có thể keyword này chưa được thêm vào Google Sheet.",
+    "😕 Em chưa tìm thấy keyword này.",
+    "📭 Keyword này hiện chưa có trong dữ liệu của em.",
+    "🔎 Em chưa thấy nội dung phù hợp với keyword này.",
+    "📝 Có thể keyword này chưa được thêm vào Google Sheet.",
 ]
 
 RELOAD_MESSAGES = [
-    "Dữ liệu đã được cập nhật xong rồi.",
-    "Em đã tải lại dữ liệu mới nhất.",
-    "Reload hoàn tất rồi ạ.",
-    "Dữ liệu từ Google Sheet đã được cập nhật.",
+    "✅ Dữ liệu đã được cập nhật xong rồi.",
+    "🔄 Em đã tải lại dữ liệu mới nhất.",
+    "✨ Reload hoàn tất rồi ạ.",
+    "📥 Dữ liệu từ Google Sheet đã được cập nhật.",
 ]
+
+
+def send_group_reminder():
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(
+                PushMessageRequest(
+                    to=config.REMINDER_GROUP_ID,
+                    messages=[
+                        TextMessage(text=config.REMINDER_TEXT)
+                    ]
+                )
+            )
+
+        print("Đã gửi tin nhắc vào group.")
+
+    except Exception as e:
+        print("Reminder Error:", e)
 
 
 @app.route("/")
@@ -120,32 +139,21 @@ def handle_message(event):
     user_text = event.message.text.strip()
     user_text_lower = user_text.lower()
 
-    group_id = getattr(event.source, "group_id", None)
-
-    if group_id:
-        print("GROUP ID:", group_id)
-
-    # Khi mọi người gọi bot trực tiếp
     if user_text_lower in [
         "bot ơi",
         "bot oi",
         "ê bot",
-        "lol bot",
-        "di bot",
-        "đĩ bot",
-        "bot đâu",
-        "bot dau",
+        "hey bot",
     ]:
         text = random.choice(GREETING_MESSAGES)
         text += (
-            f"\n\nGõ {config.BOT_PREFIX}help để xem hướng dẫn "
+            f"\n\n💡 Gõ {config.BOT_PREFIX}help để xem hướng dẫn "
             f"hoặc {config.BOT_PREFIX}<keyword> để tra cứu."
         )
 
         reply_text(event.reply_token, text)
         return
 
-    # Bỏ qua các tin nhắn không phải lệnh bot
     if not user_text.startswith(config.BOT_PREFIX):
         return
 
@@ -157,22 +165,18 @@ def handle_message(event):
         text = f"""
 {random.choice(HELP_OPENINGS)}
 
-CÁC LỆNH HIỆN CÓ
+━━━━━━━━━━━━━━
+📌 CÁC LỆNH HIỆN CÓ
+━━━━━━━━━━━━━━
 
-{config.BOT_PREFIX}list
+📋 {config.BOT_PREFIX}list
 Xem toàn bộ keyword hiện có
 
-{config.BOT_PREFIX}reload
+🔄 {config.BOT_PREFIX}reload
 Cập nhật lại dữ liệu từ Google Sheet
 
-{config.BOT_PREFIX}<keyword>
+🔎 {config.BOT_PREFIX}<keyword>
 Tra cứu câu trả lời theo keyword
-
-VÍ DỤ
-
-{config.BOT_PREFIX}wifi
-{config.BOT_PREFIX}airpods
-{config.BOT_PREFIX}macbook
 
 {random.choice(HELP_CLOSINGS)}
 """.strip()
@@ -184,23 +188,21 @@ VÍ DỤ
 
             if not data:
                 text = random.choice([
-                    "Hiện tại em chưa thấy keyword nào trong dữ liệu.",
-                    "Google Sheet đang chưa có keyword để em hiển thị.",
-                    "Em chưa tìm thấy keyword nào, mình kiểm tra lại Sheet nhé.",
+                    "📭 Hiện tại em chưa thấy keyword nào trong dữ liệu.",
+                    "🗂️ Google Sheet đang chưa có keyword để em hiển thị.",
+                    "🔎 Em chưa tìm thấy keyword nào, mình kiểm tra lại Sheet nhé.",
                 ])
 
             else:
                 keys = sorted(data.keys())
 
                 text = random.choice(LIST_OPENINGS)
-                text += "\n\n"
+                text += "\n\n━━━━━━━━━━━━━━\n"
                 text += "\n".join(f"• {key}" for key in keys)
-                text += (
-                    f"\n\nVí dụ: {config.BOT_PREFIX}{keys[0]}"
-                )
+                text += "\n━━━━━━━━━━━━━━"
 
         except Exception as e:
-            text = f"Em chưa đọc được dữ liệu.\nChi tiết: {e}"
+            text = f"⚠️ Em chưa đọc được dữ liệu.\nChi tiết: {e}"
 
     # RELOAD
     elif command_lower == "reload":
@@ -209,12 +211,21 @@ VÍ DỤ
 
             text = random.choice(RELOAD_MESSAGES)
             text += (
-                f"\n\nMình thử tra cứu lại bằng "
+                f"\n\n🔎 Mình thử tra cứu lại bằng "
                 f"{config.BOT_PREFIX}<keyword> nhé."
             )
 
         except Exception as e:
-            text = f"Em chưa thể cập nhật dữ liệu.\nChi tiết: {e}"
+            text = f"⚠️ Em chưa thể cập nhật dữ liệu.\nChi tiết: {e}"
+
+    # TEST REMINDER
+    elif command_lower == "testreminder":
+        send_group_reminder()
+
+        text = (
+            "✅ Em đã gửi tin nhắc thử vào group.\n\n"
+            "Mình kiểm tra tin nhắn phía trên nhé."
+        )
 
     # SEARCH KEYWORD
     else:
@@ -224,10 +235,9 @@ VÍ DỤ
             if result is None:
                 text = random.choice(NOT_FOUND_MESSAGES)
                 text += (
-                    f"\n\nKeyword mình vừa tìm là: {command}"
-                    f"\n\nMình thử kiểm tra lại cách viết, "
-                    f"hoặc gõ {config.BOT_PREFIX}list để xem "
-                    f"danh sách keyword nhé."
+                    f"\n\n🔍 Keyword mình vừa tìm: {command}"
+                    f"\n\n📋 Gõ {config.BOT_PREFIX}list để xem "
+                    f"danh sách keyword hiện có nhé."
                 )
 
             else:
@@ -235,7 +245,7 @@ VÍ DỤ
                 text += f"\n\n{result}"
 
         except Exception as e:
-            text = f"Em gặp lỗi khi tra cứu.\nChi tiết: {e}"
+            text = f"⚠️ Em gặp lỗi khi tra cứu.\nChi tiết: {e}"
 
     reply_text(event.reply_token, text)
 
