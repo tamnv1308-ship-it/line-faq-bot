@@ -179,6 +179,10 @@ def handle_message(event):
     command = user_text[len(config.BOT_PREFIX):].strip()
     command_lower = command.lower()
 
+    # Ẩn các lệnh nội bộ
+    if command_lower in ["list", "reload", "testreminder"]:
+        return
+        
     # HELP
     if command_lower in ["help", ""]:
         text = f"""
@@ -187,12 +191,6 @@ def handle_message(event):
 ━━━━━━━━━━━━━━
 📌 CÁC LỆNH HIỆN CÓ
 ━━━━━━━━━━━━━━
-
-📋 {config.BOT_PREFIX}list
-Xem toàn bộ keyword hiện có
-
-🔄 {config.BOT_PREFIX}reload
-Cập nhật lại dữ liệu từ Google Sheet
 
 🔎 {config.BOT_PREFIX}<keyword>
 Tra cứu câu trả lời theo keyword
@@ -255,8 +253,7 @@ Tra cứu câu trả lời theo keyword
                 text = random.choice(NOT_FOUND_MESSAGES)
                 text += (
                     f"\n\n🔍 Keyword mình vừa tìm: {command}"
-                    f"\n\n📋 Gõ {config.BOT_PREFIX}list để xem "
-                    f"danh sách keyword hiện có nhé."
+                    f"\n\n💡 Mình thử kiểm tra lại cách viết keyword nhé. "
                 )
 
             else:
