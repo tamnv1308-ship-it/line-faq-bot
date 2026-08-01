@@ -179,7 +179,12 @@ def handle_message(event):
     command_lower = command.lower()
 
     # Ẩn các lệnh nội bộ
-    if command_lower in ["list", "reload", "testreminder"]:
+    admin_commands = ["list", "reload", "testreminder"]
+
+    if (
+        command_lower in admin_commands
+        and event.source.user_id not in config.ADMIN_USER_IDS
+    ):
         return
         
     # HELP
