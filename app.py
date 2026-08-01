@@ -71,14 +71,14 @@ NOT_FOUND_MESSAGES = [
     "😕 Em chưa tìm thấy keyword này.",
     "📭 Keyword này hiện chưa có trong dữ liệu của em.",
     "🔎 Em chưa thấy nội dung phù hợp với keyword này.",
-    "📝 Có thể keyword này chưa được thêm vào Google Sheet.",
+    "📝 Có thể keyword này chưa được thêm vào danh sách",
 ]
 
 RELOAD_MESSAGES = [
     "✅ Dữ liệu đã được cập nhật xong rồi.",
     "🔄 Em đã tải lại dữ liệu mới nhất.",
     "✨ Reload hoàn tất rồi ạ.",
-    "📥 Dữ liệu từ Google Sheet đã được cập nhật.",
+    "📥 Dữ liệu đã được cập nhật.",
 ]
 
 
