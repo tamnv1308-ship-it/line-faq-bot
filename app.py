@@ -120,6 +120,11 @@ def handle_message(event):
     user_text = event.message.text.strip()
     user_text_lower = user_text.lower()
 
+    group_id = getattr(event.source, "group_id", None)
+
+    if group_id:
+        print("GROUP ID:", group_id)
+
     # Khi mọi người gọi bot trực tiếp
     if user_text_lower in [
         "bot ơi",
