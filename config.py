@@ -17,3 +17,7 @@ Chào buổi sáng mọi người.
 Chúc cả group một ngày thật nhiều năng lượng và làm việc hiệu quả.
 Có gì cần tra cứu, mọi người cứ gọi em nhé.
 """.strip()
+
+ADMIN_USER_IDS = [
+    "U60751d1a57eb4707a3dff9c06f3240a4"
+]
