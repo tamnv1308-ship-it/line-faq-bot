@@ -29,7 +29,7 @@ configuration = Configuration(
 handler = WebhookHandler(
     config.CHANNEL_SECRET
 )
-
+seen_group_ids = set()
 
 GREETING_MESSAGES = [
     "👋 Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
@@ -158,6 +158,11 @@ def reply_text(reply_token, text):
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
+    group_id = getattr(event.source, "group_id", None)
+
+    if group_id and group_id not in seen_group_ids:
+        print("NEW GROUP ID:", group_id)
+        seen_group_ids.add(group_id)
     user_text_lower = user_text.lower()
 
     if user_text_lower in [
