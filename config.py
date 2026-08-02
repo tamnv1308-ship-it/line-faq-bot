@@ -44,7 +44,7 @@ REMINDERS = [
     
     {
         "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
-        "message": "Nội dung riêng của group 7.",
+        "message": "Nội dung riêng của group 8.",
     },
         
 ]
