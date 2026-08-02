@@ -82,22 +82,25 @@ RELOAD_MESSAGES = [
 ]
 
 
-def send_group_reminder():
-    try:
-        with ApiClient(configuration) as api_client:
-            MessagingApi(api_client).push_message(
-                PushMessageRequest(
-                    to=config.REMINDER_GROUP_ID,
-                    messages=[
-                        TextMessage(text=config.REMINDER_TEXT)
-                    ]
+def send_all_reminders():
+    for reminder in config.REMINDERS:
+        try:
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).push_message(
+                    PushMessageRequest(
+                        to=reminder["group_id"],
+                        messages=[
+                            TextMessage(text=reminder["message"])
+                        ]
+                    )
                 )
+
+            print(f"Đã gửi: {reminder['group_id']}")
+
+        except Exception as e:
+            print(
+                f"Lỗi gửi group {reminder['group_id']}: {e}"
             )
-
-        print("Đã gửi tin nhắc vào group.")
-
-    except Exception as e:
-        print("Reminder Error:", e)
 
 
 scheduler = BackgroundScheduler(
@@ -105,7 +108,7 @@ scheduler = BackgroundScheduler(
 )
 
 scheduler.add_job(
-    send_group_reminder,
+    send_all_reminders,
     trigger="cron",
     hour=9,
     minute=0,
@@ -179,7 +182,12 @@ def handle_message(event):
     command_lower = command.lower()
 
     # Ẩn các lệnh nội bộ
-    admin_commands = ["list", "reload", "testreminder"]
+    admin_commands = [
+    "list",
+    "reload",
+    "testreminder",
+    "sendall",
+]
 
     if (
         command_lower in admin_commands
@@ -240,12 +248,11 @@ Tra cứu câu trả lời theo keyword
             text = f"⚠️ Em chưa thể cập nhật dữ liệu.\nChi tiết: {e}"
 
     # TEST REMINDER
-    elif command_lower == "testreminder":
-        send_group_reminder()
+    elif command_lower == "sendall":
+        send_all_reminders()
 
         text = (
-            "✅ Em đã gửi tin nhắc thử vào group.\n\n"
-            "Mình kiểm tra tin nhắn phía trên nhé."
+            "Đã gửi thông báo đến các group đã thiết lập."
         )
 
     # SEARCH KEYWORD
