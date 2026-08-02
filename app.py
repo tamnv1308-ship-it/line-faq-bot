@@ -31,7 +31,7 @@ handler = WebhookHandler(
 )
 
 seen_chat_ids = set()
-
+seen_user_ids = set()
 
 GREETING_MESSAGES = [
     "👋 Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
@@ -167,6 +167,12 @@ def handle_message(event):
     if chat_id and chat_id not in seen_chat_ids:
         app.logger.warning("NEW CHAT ID: %s", chat_id)
         seen_chat_ids.add(chat_id)
+
+    user_id = getattr(event.source, "user_id", None)
+
+    if user_id and user_id not in seen_user_ids:
+        app.logger.warning("NEW USER ID: %s", user_id)
+        seen_user_ids.add(user_id)
 
     if user_text_lower in [
         "bot ơi",
