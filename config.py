@@ -15,35 +15,35 @@ REMINDERS = [
         "message": "Chào buổi sáng Group 1.\nChúc mọi người một ngày hiệu quả.",
     },
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Chào buổi sáng Group 2.\nNội dung riêng của group 2.",
     },
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Nội dung riêng của group 3.",
     },
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Nội dung riêng của group 4.",
     },
     
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Nội dung riêng của group 5.",
     },
     
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Nội dung riêng của group 6.",
     },
     
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Nội dung riêng của group 7.",
     },
     
     {
-        "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+        "group_id": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
         "message": "Nội dung riêng của group 8.",
     },
         
