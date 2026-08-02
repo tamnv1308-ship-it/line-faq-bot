@@ -29,7 +29,9 @@ configuration = Configuration(
 handler = WebhookHandler(
     config.CHANNEL_SECRET
 )
-seen_group_ids = set()
+
+seen_chat_ids = set()
+
 
 GREETING_MESSAGES = [
     "👋 Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
@@ -49,14 +51,13 @@ HELP_OPENINGS = [
 HELP_CLOSINGS = [
     "💬 Mình cứ gửi câu lệnh, em tìm giúp ngay.",
     "⚡ Gõ đúng keyword là em trả lời liền ạ.",
-    f"🌈 Em luôn sẵn sàng hỗ trợ trong group.",
+    "🌈 Em luôn sẵn sàng hỗ trợ trong group.",
 ]
 
 LIST_OPENINGS = [
     "📚 Danh sách keyword hiện có đây ạ.",
     "🔎 Em tìm được các keyword này.",
     "🗂️ Mình có thể tra cứu bằng những keyword bên dưới.",
-    "✨ Đây là các nội dung bot đang hỗ trợ.",
 ]
 
 ANSWER_OPENINGS = [
@@ -64,21 +65,13 @@ ANSWER_OPENINGS = [
     "📌 Dạ, nội dung mình cần đây ạ.",
     "💬 Em gửi mình câu trả lời nhé.",
     "🔍 Thông tin tra cứu của mình đây.",
-    "✨ Em đã tìm thấy nội dung phù hợp.",
 ]
 
 NOT_FOUND_MESSAGES = [
     "😕 Em chưa tìm thấy keyword này.",
     "📭 Keyword này hiện chưa có trong dữ liệu của em.",
     "🔎 Em chưa thấy nội dung phù hợp với keyword này.",
-    "📝 Có thể keyword này chưa được thêm vào danh sách",
-]
-
-RELOAD_MESSAGES = [
-    "✅ Dữ liệu đã được cập nhật xong rồi.",
-    "🔄 Em đã tải lại dữ liệu mới nhất.",
-    "✨ Reload hoàn tất rồi ạ.",
-    "📥 Dữ liệu đã được cập nhật.",
+    "📝 Có thể keyword này chưa được thêm vào danh sách.",
 ]
 
 
@@ -95,11 +88,16 @@ def send_all_reminders():
                     )
                 )
 
-            print(f"Đã gửi: {reminder['group_id']}")
+            app.logger.warning(
+                "Đã gửi nhắc: %s",
+                reminder["group_id"]
+            )
 
         except Exception as e:
-            print(
-                f"Lỗi gửi group {reminder['group_id']}: {e}"
+            app.logger.error(
+                "Lỗi gửi group %s: %s",
+                reminder["group_id"],
+                e
             )
 
 
@@ -152,18 +150,23 @@ def reply_text(reply_token, text):
             )
 
     except Exception as e:
-        print("Reply Error:", e)
+        app.logger.error("Reply Error: %s", e)
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
-    group_id = getattr(event.source, "group_id", None)
-
-    if group_id and group_id not in seen_group_ids:
-        print("NEW GROUP ID:", group_id)
-        seen_group_ids.add(group_id)
     user_text_lower = user_text.lower()
+
+    # Tự ghi ID group/room vào Render Logs, không trả lời group
+    chat_id = (
+        getattr(event.source, "group_id", None)
+        or getattr(event.source, "room_id", None)
+    )
+
+    if chat_id and chat_id not in seen_chat_ids:
+        app.logger.warning("NEW CHAT ID: %s", chat_id)
+        seen_chat_ids.add(chat_id)
 
     if user_text_lower in [
         "bot ơi",
@@ -186,20 +189,19 @@ def handle_message(event):
     command = user_text[len(config.BOT_PREFIX):].strip()
     command_lower = command.lower()
 
-    # Ẩn các lệnh nội bộ
+    # Lệnh nội bộ: chỉ QTV được dùng, người khác sẽ không nhận phản hồi
     admin_commands = [
-    "list",
-    "reload",
-    "testreminder",
-    "sendall",
-]
+        "list",
+        "reload",
+        "sendall",
+    ]
 
     if (
         command_lower in admin_commands
         and event.source.user_id not in config.ADMIN_USER_IDS
     ):
         return
-        
+
     # HELP
     if command_lower in ["help", ""]:
         text = f"""
@@ -215,18 +217,13 @@ Tra cứu câu trả lời theo keyword
 {random.choice(HELP_CLOSINGS)}
 """.strip()
 
-    # LIST
+    # LIST: chỉ QTV
     elif command_lower == "list":
         try:
             data = sheets.load_sheet()
 
             if not data:
-                text = random.choice([
-                    "📭 Hiện tại em chưa thấy keyword nào trong dữ liệu.",
-                    "🗂️ Google Sheet đang chưa có keyword để em hiển thị.",
-                    "🔎 Em chưa tìm thấy keyword nào, mình kiểm tra lại Sheet nhé.",
-                ])
-
+                text = "📭 Hiện tại em chưa thấy keyword nào trong dữ liệu."
             else:
                 keys = sorted(data.keys())
 
@@ -238,27 +235,19 @@ Tra cứu câu trả lời theo keyword
         except Exception as e:
             text = f"⚠️ Em chưa đọc được dữ liệu.\nChi tiết: {e}"
 
-    # RELOAD
+    # RELOAD: chỉ QTV
     elif command_lower == "reload":
         try:
             sheets.reload()
-
-            text = random.choice(RELOAD_MESSAGES)
-            text += (
-                f"\n\n🔎 Mình thử tra cứu lại bằng "
-                f"{config.BOT_PREFIX}<keyword> nhé."
-            )
+            text = "✅ Dữ liệu đã được cập nhật xong rồi."
 
         except Exception as e:
             text = f"⚠️ Em chưa thể cập nhật dữ liệu.\nChi tiết: {e}"
 
-    # TEST REMINDER
+    # SEND ALL: chỉ QTV
     elif command_lower == "sendall":
         send_all_reminders()
-
-        text = (
-            "Đã gửi thông báo đến các group đã thiết lập."
-        )
+        text = "✅ Đã gửi thông báo đến các group đã thiết lập."
 
     # SEARCH KEYWORD
     else:
@@ -269,9 +258,8 @@ Tra cứu câu trả lời theo keyword
                 text = random.choice(NOT_FOUND_MESSAGES)
                 text += (
                     f"\n\n🔍 Keyword mình vừa tìm: {command}"
-                    f"\n\n💡 Mình thử kiểm tra lại cách viết keyword nhé. "
+                    "\n\n💡 Mình thử kiểm tra lại cách viết keyword nhé."
                 )
-
             else:
                 text = random.choice(ANSWER_OPENINGS)
                 text += f"\n\n{result}"
@@ -283,11 +271,6 @@ Tra cứu câu trả lời theo keyword
 
 
 if __name__ == "__main__":
-    print("======================")
-    print(config.BOT_NAME)
-    print("Server is starting...")
-    print("======================")
-
     app.run(
         host="0.0.0.0",
         port=5000,
