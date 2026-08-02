@@ -164,15 +164,47 @@ def handle_message(event):
         or getattr(event.source, "room_id", None)
     )
 
-    if chat_id and chat_id not in seen_chat_ids:
-        app.logger.warning("NEW CHAT ID: %s", chat_id)
-        seen_chat_ids.add(chat_id)
-
     user_id = getattr(event.source, "user_id", None)
 
-    if user_id and user_id not in seen_user_ids:
-        app.logger.warning("NEW USER ID: %s", user_id)
-        seen_user_ids.add(user_id)
+    if chat_id and chat_id not in seen_chat_ids:
+        group_name = "Không lấy được tên group"
+        user_name = "Không lấy được tên user"
+
+        try:
+            with ApiClient(configuration) as api_client:
+                bot = MessagingApi(api_client)
+
+                if getattr(event.source, "group_id", None):
+                    group = bot.get_group_summary(chat_id)
+                    group_name = group.group_name
+
+                    if user_id:
+                        profile = bot.get_group_member_profile(
+                            chat_id,
+                            user_id
+                        )
+                        user_name = profile.display_name
+
+                elif getattr(event.source, "room_id", None) and user_id:
+                    profile = bot.get_room_member_profile(
+                        chat_id,
+                        user_id
+                    )
+                    user_name = profile.display_name
+
+        except Exception as e:
+            app.logger.warning("Không lấy được tên: %s", e)
+
+        app.logger.warning(
+            "NEW CHAT | Nhóm: %s | Group ID: %s | "
+            "Người nhắn: %s | User ID: %s",
+            group_name,
+            chat_id,
+            user_name,
+            user_id
+        )
+
+        seen_chat_ids.add(chat_id)
 
     if user_text_lower in [
         "bot ơi",
