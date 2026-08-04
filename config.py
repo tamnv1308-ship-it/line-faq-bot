@@ -50,5 +50,8 @@ REMINDERS = [
 ]
 
 ADMIN_USER_IDS = [
-    "U60751d1a57eb4707a3dff9c06f3240a4"
+    "U60751d1a57eb4707a3dff9c06f3240a4",
+    "Ud29d838c51efaecd363ff5bc9ffa2a4c",
+    "U810ef43dc32d6cb1c3bb332f7aabad4c",
+    "Ua7faef12dfde3213c23d01c34dfede91",
 ]
