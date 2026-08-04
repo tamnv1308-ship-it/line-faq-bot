@@ -31,33 +31,25 @@ handler = WebhookHandler(
 )
 
 seen_chat_ids = set()
-seen_user_ids = set()
+
 
 GREETING_MESSAGES = [
     "👋 Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
     "🙋 Em đây ạ.\n\nMình muốn tìm thông tin nào nè?",
     "✨ Dạ có em.\n\nMình gõ keyword để em tìm giúp nhé.",
     "🌟 Em sẵn sàng đây.\n\nMình cần tra cứu nội dung gì ạ?",
-    "📩 Dạ, em có mặt.\n\nGõ lệnh hoặc keyword, em hỗ trợ mình ngay.",
 ]
 
 HELP_OPENINGS = [
     f"🤖 {config.BOT_NAME} xin chào.",
     f"📚 Dạ, đây là phần hướng dẫn của {config.BOT_NAME}.",
     "📝 Em gửi mình các lệnh đang sử dụng được nhé.",
-    "🔎 Mình có thể dùng các lệnh sau để tra cứu nhanh.",
 ]
 
 HELP_CLOSINGS = [
     "💬 Mình cứ gửi câu lệnh, em tìm giúp ngay.",
     "⚡ Gõ đúng keyword là em trả lời liền ạ.",
     "🌈 Em luôn sẵn sàng hỗ trợ trong group.",
-]
-
-LIST_OPENINGS = [
-    "📚 Danh sách keyword hiện có đây ạ.",
-    "🔎 Em tìm được các keyword này.",
-    "🗂️ Mình có thể tra cứu bằng những keyword bên dưới.",
 ]
 
 ANSWER_OPENINGS = [
@@ -71,33 +63,44 @@ NOT_FOUND_MESSAGES = [
     "😕 Em chưa tìm thấy keyword này.",
     "📭 Keyword này hiện chưa có trong dữ liệu của em.",
     "🔎 Em chưa thấy nội dung phù hợp với keyword này.",
-    "📝 Có thể keyword này chưa được thêm vào danh sách.",
 ]
+
+
+def push_to_group(group_id, text):
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(
+                PushMessageRequest(
+                    to=group_id,
+                    messages=[
+                        TextMessage(text=text)
+                    ]
+                )
+            )
+
+        return True, None
+
+    except Exception as e:
+        return False, str(e)
 
 
 def send_all_reminders():
     for reminder in config.REMINDERS:
-        try:
-            with ApiClient(configuration) as api_client:
-                MessagingApi(api_client).push_message(
-                    PushMessageRequest(
-                        to=reminder["group_id"],
-                        messages=[
-                            TextMessage(text=reminder["message"])
-                        ]
-                    )
-                )
+        success, error = push_to_group(
+            reminder["group_id"],
+            reminder["message"]
+        )
 
+        if success:
             app.logger.warning(
                 "Đã gửi nhắc: %s",
                 reminder["group_id"]
             )
-
-        except Exception as e:
+        else:
             app.logger.error(
                 "Lỗi gửi group %s: %s",
                 reminder["group_id"],
-                e
+                error
             )
 
 
@@ -109,7 +112,7 @@ scheduler.add_job(
     send_all_reminders,
     trigger="cron",
     hour=8,
-    minute=1,
+    minute=0,
     id="morning_reminder",
     replace_existing=True,
     max_instances=1
@@ -158,52 +161,13 @@ def handle_message(event):
     user_text = event.message.text.strip()
     user_text_lower = user_text.lower()
 
-    # Tự ghi ID group/room vào Render Logs, không trả lời group
     chat_id = (
         getattr(event.source, "group_id", None)
         or getattr(event.source, "room_id", None)
     )
 
-    user_id = getattr(event.source, "user_id", None)
-
     if chat_id and chat_id not in seen_chat_ids:
-        group_name = "Không lấy được tên group"
-        user_name = "Không lấy được tên user"
-
-        try:
-            with ApiClient(configuration) as api_client:
-                bot = MessagingApi(api_client)
-
-                if getattr(event.source, "group_id", None):
-                    group = bot.get_group_summary(chat_id)
-                    group_name = group.group_name
-
-                    if user_id:
-                        profile = bot.get_group_member_profile(
-                            chat_id,
-                            user_id
-                        )
-                        user_name = profile.display_name
-
-                elif getattr(event.source, "room_id", None) and user_id:
-                    profile = bot.get_room_member_profile(
-                        chat_id,
-                        user_id
-                    )
-                    user_name = profile.display_name
-
-        except Exception as e:
-            app.logger.warning("Không lấy được tên: %s", e)
-
-        app.logger.warning(
-            "NEW CHAT | Nhóm: %s | Group ID: %s | "
-            "Người nhắn: %s | User ID: %s",
-            group_name,
-            chat_id,
-            user_name,
-            user_id
-        )
-
+        app.logger.warning("NEW CHAT ID: %s", chat_id)
         seen_chat_ids.add(chat_id)
 
     if user_text_lower in [
@@ -226,17 +190,21 @@ def handle_message(event):
 
     command = user_text[len(config.BOT_PREFIX):].strip()
     command_lower = command.lower()
+    command_name = command_lower.split(maxsplit=1)[0] if command_lower else ""
 
-    # Lệnh nội bộ: chỉ QTV được dùng, người khác sẽ không nhận phản hồi
     admin_commands = [
         "list",
         "reload",
         "sendall",
+        "send",
+        "say",
     ]
 
+    user_id = getattr(event.source, "user_id", None)
+
     if (
-        command_lower in admin_commands
-        and event.source.user_id not in config.ADMIN_USER_IDS
+        command_name in admin_commands
+        and user_id not in config.ADMIN_USER_IDS
     ):
         return
 
@@ -255,39 +223,100 @@ Tra cứu câu trả lời theo keyword
 {random.choice(HELP_CLOSINGS)}
 """.strip()
 
-    # LIST: chỉ QTV
+    # LỆNH NỘI BỘ: GỬI TẤT CẢ GROUP
+    elif command_lower == "sendall":
+        send_all_reminders()
+        text = "✅ Đã gửi thông báo đến các group đã thiết lập."
+
+    # LỆNH NỘI BỘ: GỬI KEYWORD SANG GROUP KHÁC
+    elif command_name == "send":
+        parts = command.split(maxsplit=2)
+
+        if len(parts) < 3:
+            text = (
+                "⚠️ Cú pháp chưa đúng.\n\n"
+                f"{config.BOT_PREFIX}send <mã group> <keyword>"
+            )
+        else:
+            group_key = parts[1].lower()
+            keyword = parts[2]
+
+            group_id = config.GROUPS.get(group_key)
+            result = sheets.search(keyword)
+
+            if not group_id:
+                text = f"⚠️ Không tìm thấy mã group: {group_key}"
+
+            elif result is None:
+                text = f"⚠️ Không tìm thấy keyword: {keyword}"
+
+            else:
+                success, error = push_to_group(group_id, result)
+
+                if success:
+                    text = (
+                        f"✅ Đã gửi keyword '{keyword}' "
+                        f"đến group '{group_key}'."
+                    )
+                else:
+                    text = f"⚠️ Gửi tin không thành công.\n{error}"
+
+    # LỆNH NỘI BỘ: GỬI NỘI DUNG TỰ VIẾT SANG GROUP KHÁC
+    elif command_name == "say":
+        payload = command[3:].strip()
+        group_key, separator, message = payload.partition("|")
+
+        group_key = group_key.strip().lower()
+        message = message.strip()
+
+        if not separator or not group_key or not message:
+            text = (
+                "⚠️ Cú pháp chưa đúng.\n\n"
+                f"{config.BOT_PREFIX}say <mã group> | <nội dung>"
+            )
+        else:
+            group_id = config.GROUPS.get(group_key)
+
+            if not group_id:
+                text = f"⚠️ Không tìm thấy mã group: {group_key}"
+
+            else:
+                success, error = push_to_group(group_id, message)
+
+                if success:
+                    text = (
+                        f"✅ Đã gửi nội dung đến group "
+                        f"'{group_key}'."
+                    )
+                else:
+                    text = f"⚠️ Gửi tin không thành công.\n{error}"
+
+    # LỆNH NỘI BỘ: LIST
     elif command_lower == "list":
         try:
             data = sheets.load_sheet()
 
             if not data:
-                text = "📭 Hiện tại em chưa thấy keyword nào trong dữ liệu."
+                text = "📭 Hiện tại chưa có keyword nào."
             else:
-                keys = sorted(data.keys())
-
-                text = random.choice(LIST_OPENINGS)
-                text += "\n\n━━━━━━━━━━━━━━\n"
-                text += "\n".join(f"• {key}" for key in keys)
-                text += "\n━━━━━━━━━━━━━━"
+                text = "📚 Danh sách keyword\n\n"
+                text += "\n".join(
+                    f"• {key}" for key in sorted(data.keys())
+                )
 
         except Exception as e:
-            text = f"⚠️ Em chưa đọc được dữ liệu.\nChi tiết: {e}"
+            text = f"⚠️ Không đọc được dữ liệu.\n{e}"
 
-    # RELOAD: chỉ QTV
+    # LỆNH NỘI BỘ: RELOAD
     elif command_lower == "reload":
         try:
             sheets.reload()
-            text = "✅ Dữ liệu đã được cập nhật xong rồi."
+            text = "✅ Dữ liệu đã được cập nhật."
 
         except Exception as e:
-            text = f"⚠️ Em chưa thể cập nhật dữ liệu.\nChi tiết: {e}"
+            text = f"⚠️ Không thể cập nhật dữ liệu.\n{e}"
 
-    # SEND ALL: chỉ QTV
-    elif command_lower == "sendall":
-        send_all_reminders()
-        text = "✅ Đã gửi thông báo đến các group đã thiết lập."
-
-    # SEARCH KEYWORD
+    # TRA KEYWORD BÌNH THƯỜNG
     else:
         try:
             result = sheets.search(command)
@@ -296,14 +325,14 @@ Tra cứu câu trả lời theo keyword
                 text = random.choice(NOT_FOUND_MESSAGES)
                 text += (
                     f"\n\n🔍 Keyword mình vừa tìm: {command}"
-                    "\n\n💡 Mình thử kiểm tra lại cách viết keyword nhé."
+                    "\n\n💡 Mình thử kiểm tra lại cách viết nhé."
                 )
             else:
                 text = random.choice(ANSWER_OPENINGS)
                 text += f"\n\n{result}"
 
         except Exception as e:
-            text = f"⚠️ Em gặp lỗi khi tra cứu.\nChi tiết: {e}"
+            text = f"⚠️ Em gặp lỗi khi tra cứu.\n{e}"
 
     reply_text(event.reply_token, text)
 
