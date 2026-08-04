@@ -108,8 +108,8 @@ scheduler = BackgroundScheduler(
 scheduler.add_job(
     send_all_reminders,
     trigger="cron",
-    hour=9,
-    minute=0,
+    hour=8,
+    minute=1,
     id="morning_reminder",
     replace_existing=True,
     max_instances=1
