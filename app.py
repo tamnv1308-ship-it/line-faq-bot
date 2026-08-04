@@ -30,7 +30,8 @@ handler = WebhookHandler(
     config.CHANNEL_SECRET
 )
 
-seen_chat_ids = set()
+group_name_cache = {}
+user_name_cache = {}
 
 
 GREETING_MESSAGES = [
@@ -161,14 +162,65 @@ def handle_message(event):
     user_text = event.message.text.strip()
     user_text_lower = user_text.lower()
 
-    chat_id = (
-        getattr(event.source, "group_id", None)
-        or getattr(event.source, "room_id", None)
-    )
+    group_id = getattr(event.source, "group_id", None)
+    room_id = getattr(event.source, "room_id", None)
+    user_id = getattr(event.source, "user_id", None)
 
-    if chat_id and chat_id not in seen_chat_ids:
-        app.logger.warning("NEW CHAT ID: %s", chat_id)
-        seen_chat_ids.add(chat_id)
+    chat_id = group_id or room_id
+    group_name = "Chat riêng"
+    user_name = "Không lấy được tên"
+
+    if chat_id:
+        group_name = group_name_cache.get(
+            chat_id,
+            "Không lấy được tên group"
+        )
+
+        user_cache_key = (chat_id, user_id)
+        user_name = user_name_cache.get(
+            user_cache_key,
+            "Không lấy được tên user"
+        )
+
+        try:
+            if (
+                chat_id not in group_name_cache
+                or user_cache_key not in user_name_cache
+            ):
+                with ApiClient(configuration) as api_client:
+                    bot = MessagingApi(api_client)
+
+                    if group_id and chat_id not in group_name_cache:
+                        group = bot.get_group_summary(group_id)
+                        group_name = group.group_name
+                        group_name_cache[chat_id] = group_name
+
+                    if user_id and user_cache_key not in user_name_cache:
+                        if group_id:
+                            profile = bot.get_group_member_profile(
+                                group_id,
+                                user_id
+                            )
+                        else:
+                            profile = bot.get_room_member_profile(
+                                room_id,
+                                user_id
+                            )
+
+                        user_name = profile.display_name
+                        user_name_cache[user_cache_key] = user_name
+
+        except Exception as e:
+            app.logger.warning("Không lấy được tên: %s", e)
+
+        app.logger.warning(
+            "GROUP: %s | GROUP ID: %s | "
+            "USER: %s | USER ID: %s",
+            group_name,
+            chat_id,
+            user_name,
+            user_id
+        )
 
     if user_text_lower in [
         "bot ơi",
