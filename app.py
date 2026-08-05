@@ -375,6 +375,34 @@ Tra cứu câu trả lời theo keyword
         except Exception as e:
             text = f"⚠️ Không thể cập nhật dữ liệu.\n{e}"
 
+        # LỆNH JOIN GROUP
+    elif command_name == "join":
+        parts = command.split(maxsplit=1)
+
+        if len(parts) == 1:
+            text = (
+                "📌 Chọn khu vực cần tham gia:\n\n"
+                f"{config.BOT_PREFIX}join bot\n"
+                f"{config.BOT_PREFIX}join test\n"
+            )
+        else:
+            area = parts[1].strip().lower()
+
+            link = config.JOIN_LINKS.get(area)
+
+            if link:
+                text = (
+                    f"👉 Link tham gia nhóm {area.upper()}:\n\n"
+                    f"{link}"
+                )
+            else:
+                text = (
+                    "❌ Không tìm thấy khu vực.\n\n"
+                    "Các khu vực hỗ trợ:\n"
+                    "• bot\n"
+                    "• test\n"
+                )
+    
     # TRA KEYWORD BÌNH THƯỜNG
     else:
         try:
