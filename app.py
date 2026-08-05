@@ -232,8 +232,8 @@ def handle_message(event):
     if user_text_lower in [
         "bot ơi",
         "bot oi",
-        "ê bot",
-        "hey bot",
+        "e bot",
+        "bot lol",
     ]:
         text = random.choice(GREETING_MESSAGES)
         text += (
