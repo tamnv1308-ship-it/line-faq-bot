@@ -85,8 +85,8 @@ def push_to_group(group_id, text):
         return False, str(e)
 
 
-def send_all_reminders():
-    for reminder in config.REMINDERS:
+def send_reminders(reminders):
+    for reminder in reminders:
         success, error = push_to_group(
             reminder["group_id"],
             reminder["message"]
@@ -105,19 +105,26 @@ def send_all_reminders():
             )
 
 
+def send_all_reminders():
+    for schedule in config.REMINDER_SCHEDULES:
+        send_reminders(schedule["reminders"])
+
+
 scheduler = BackgroundScheduler(
     timezone=ZoneInfo("Asia/Ho_Chi_Minh")
 )
 
-scheduler.add_job(
-    send_all_reminders,
-    trigger="cron",
-    hour=8,
-    minute=0,
-    id="morning_reminder",
-    replace_existing=True,
-    max_instances=1
-)
+for schedule in config.REMINDER_SCHEDULES:
+    scheduler.add_job(
+        send_reminders,
+        trigger="cron",
+        hour=schedule["hour"],
+        minute=schedule["minute"],
+        args=[schedule["reminders"]],
+        id=f"reminder_{schedule['id']}",
+        replace_existing=True,
+        max_instances=1
+    )
 
 scheduler.start()
 
