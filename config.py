@@ -17,8 +17,8 @@ GROUPS = {
 }
 
 JOIN_LINKS = {
-    "bot": "Ca6ebad8571ec436ed0cc4a68729d22c0",
-    "test": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
+    "bot": "https://line.me/ti/g/CR9UsaW2kq",
+    "test": "https://line.me/ti/g/CR9UsaW2kq",
     "dn": "LINK_MOI_GROUP_DA_NANG",
 }
 
