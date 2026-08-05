@@ -257,6 +257,7 @@ def handle_message(event):
         "sendall",
         "send",
         "say",
+        "test",
     ]
 
     user_id = getattr(event.source, "user_id", None)
@@ -401,6 +402,36 @@ Tra cứu câu trả lời theo keyword
                     "Các khu vực hỗ trợ:\n"
                     "• bot\n"
                     "• test\n"
+                )
+
+        # TEST KHUNG GIỜ NHẮC
+    elif command_name == "test":
+        parts = command.split(maxsplit=1)
+
+        if len(parts) < 2:
+            text = (
+                "⚠️ Gõ: !test <keywork>"
+            )
+        else:
+            schedule_id = parts[1].lower()
+
+            schedule = next(
+                (
+                    item
+                    for item in config.REMINDER_SCHEDULES
+                    if item["id"] == schedule_id
+                ),
+                None
+            )
+
+            if schedule is None:
+                text = (
+                    f"⚠️ Không tìm thấy khung giờ: {schedule_id}"
+                )
+            else:
+                send_reminders(schedule["reminders"])
+                text = (
+                    f"✅ Đã gửi thử khung '{schedule_id}'."
                 )
     
     # TRA KEYWORD BÌNH THƯỜNG
