@@ -11,10 +11,17 @@ CACHE_TIME = 300
 BOT_NAME = "LINE FAQ BOT"
 
 GROUPS = {
-    "hn": "Ca6ebad8571ec436ed0cc4a68729d22c0",
-    "hcm": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
+    "bot": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+    "test": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
     "dcn": "GROUP_ID_DA_NANG",
 }
+
+JOIN_LINKS = {
+    "bot": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+    "test": "C4f38e1a465a6dd1b0a3cd5c175f84c62",
+    "dn": "LINK_MOI_GROUP_DA_NANG",
+}
+
 ADMIN_USER_IDS = [
     "U60751d1a57eb4707a3dff9c06f3240a4",
     "Ud29d838c51efaecd363ff5bc9ffa2a4c",
