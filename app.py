@@ -14,6 +14,9 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     PushMessageRequest,
     TextMessage,
+    QuickReply,
+    QuickReplyItem,
+    MessageAction,
 )
 
 import config
@@ -163,6 +166,47 @@ def reply_text(reply_token, text):
     except Exception as e:
         app.logger.error("Reply Error: %s", e)
 
+def reply_with_buttons(reply_token, text, buttons):
+    """
+    Gửi text kèm các nút Quick Reply.
+
+    buttons:
+    [
+        ("Tên nút", "Nội dung bot sẽ nhận"),
+        ...
+    ]
+    """
+
+    items = []
+
+    for label, message in buttons:
+        items.append(
+            QuickReplyItem(
+                action=MessageAction(
+                    label=label,
+                    text=message
+                )
+            )
+        )
+
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[
+                        TextMessage(
+                            text=text,
+                            quick_reply=QuickReply(
+                                items=items
+                            )
+                        )
+                    ]
+                )
+            )
+
+    except Exception as e:
+        app.logger.error("Reply Quick Reply Error: %s", e)
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -230,19 +274,29 @@ def handle_message(event):
         )
 
     if user_text_lower in [
-        "bot ơi",
-        "bot oi",
-        "e bot",
-        "bot lol",
-    ]:
-        text = random.choice(GREETING_MESSAGES)
-        text += (
-            f"\n\n💡 Gõ {config.BOT_PREFIX}help để xem hướng dẫn "
-            f"hoặc {config.BOT_PREFIX}<keyword> để tra cứu."
-        )
+    "bot ơi",
+    "bot oi",
+    "e bot",
+    "bot lol",
+]:
+    text = (
+        "👋 Dạ, em đây ạ.\n\n"
+        "Mình muốn em hỗ trợ gì?"
+    )
 
-        reply_text(event.reply_token, text)
-        return
+    buttons = [
+        ("🔎 Tra cứu", f"{config.BOT_PREFIX}help"),
+        ("🔗 Join Group", f"{config.BOT_PREFIX}join"),
+        ("📚 Hướng dẫn", f"{config.BOT_PREFIX}help"),
+    ]
+
+    reply_with_buttons(
+        event.reply_token,
+        text,
+        buttons
+    )
+
+    return
 
     if not user_text.startswith(config.BOT_PREFIX):
         return
@@ -382,10 +436,21 @@ Tra cứu câu trả lời theo keyword
 
         if len(parts) == 1:
             text = (
-                "📌 Chọn khu vực cần tham gia:\n\n"
-                f"{config.BOT_PREFIX}join bot\n"
-                f"{config.BOT_PREFIX}join test\n"
+        "📌 Chọn khu vực cần tham gia:"
             )
+
+            buttons = [
+        ("🤖 Bot", f"{config.BOT_PREFIX}join bot"),
+        ("🧪 Test", f"{config.BOT_PREFIX}join test"),
+            ]
+
+            reply_with_buttons(
+        event.reply_token,
+        text,
+        buttons
+            )
+
+            return
         else:
             area = parts[1].strip().lower()
 
