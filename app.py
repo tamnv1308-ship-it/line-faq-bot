@@ -273,32 +273,32 @@ def handle_message(event):
             user_id
         )
 
-        if user_text_lower in [
-            "bot ơi",
-            "bot oi",
-            "e bot",
-            "bot lol",
-        ]:
-            text = (
+    # MENU KHI NGƯỜI DÙNG GỌI BOT
+    if user_text_lower in [
+        "bot ơi",
+        "bot oi",
+        "e bot",
+        "bot lol",
+    ]:
+        text = (
             "👋 Dạ, em đây ạ.\n\n"
             "Mình muốn em hỗ trợ gì?"
-            )
+        )
 
-            buttons = [
+        buttons = [
             ("🔎 Tra cứu", f"{config.BOT_PREFIX}help"),
             ("🔗 Join Group", f"{config.BOT_PREFIX}join"),
             ("📚 Hướng dẫn", f"{config.BOT_PREFIX}help"),
-            ]
+        ]
 
-            reply_with_buttons(
+        reply_with_buttons(
             event.reply_token,
             text,
             buttons
-            )
-
+        )
         return
 
-        if not user_text.startswith(config.BOT_PREFIX):
+    if not user_text.startswith(config.BOT_PREFIX):
         return
 
     command = user_text[len(config.BOT_PREFIX):].strip()
@@ -313,8 +313,6 @@ def handle_message(event):
         "say",
         "test",
     ]
-
-    user_id = getattr(event.source, "user_id", None)
 
     if (
         command_name in admin_commands
@@ -430,53 +428,47 @@ Tra cứu câu trả lời theo keyword
         except Exception as e:
             text = f"⚠️ Không thể cập nhật dữ liệu.\n{e}"
 
-        # LỆNH JOIN GROUP
+    # LỆNH JOIN GROUP
     elif command_name == "join":
         parts = command.split(maxsplit=1)
 
         if len(parts) == 1:
-            text = (
-        "📌 Chọn khu vực cần tham gia:"
-            )
+            text = "📌 Chọn khu vực cần tham gia:"
 
             buttons = [
-        ("🤖 Bot", f"{config.BOT_PREFIX}join bot"),
-        ("🧪 Test", f"{config.BOT_PREFIX}join test"),
+                ("🤖 Bot", f"{config.BOT_PREFIX}join bot"),
+                ("🧪 Test", f"{config.BOT_PREFIX}join test"),
             ]
 
             reply_with_buttons(
-        event.reply_token,
-        text,
-        buttons
+                event.reply_token,
+                text,
+                buttons
+            )
+            return
+
+        area = parts[1].strip().lower()
+        link = config.JOIN_LINKS.get(area)
+
+        if link:
+            text = (
+                f"👉 Link tham gia nhóm {area.upper()}:\n\n"
+                f"{link}"
+            )
+        else:
+            text = (
+                "❌ Không tìm thấy khu vực.\n\n"
+                "Các khu vực hỗ trợ:\n"
+                "• bot\n"
+                "• test\n"
             )
 
-            return
-        else:
-            area = parts[1].strip().lower()
-
-            link = config.JOIN_LINKS.get(area)
-
-            if link:
-                text = (
-                    f"👉 Link tham gia nhóm {area.upper()}:\n\n"
-                    f"{link}"
-                )
-            else:
-                text = (
-                    "❌ Không tìm thấy khu vực.\n\n"
-                    "Các khu vực hỗ trợ:\n"
-                    "• bot\n"
-                    "• test\n"
-                )
-
-        # TEST KHUNG GIỜ NHẮC
+    # TEST KHUNG GIỜ NHẮC
     elif command_name == "test":
         parts = command.split(maxsplit=1)
 
         if len(parts) < 2:
-            text = (
-                "⚠️ Gõ: !test <keywork>"
-            )
+            text = "⚠️ Gõ: !test <keyword>"
         else:
             schedule_id = parts[1].lower()
 
@@ -490,15 +482,11 @@ Tra cứu câu trả lời theo keyword
             )
 
             if schedule is None:
-                text = (
-                    f"⚠️ Không tìm thấy khung giờ: {schedule_id}"
-                )
+                text = f"⚠️ Không tìm thấy khung giờ: {schedule_id}"
             else:
                 send_reminders(schedule["reminders"])
-                text = (
-                    f"✅ Đã gửi thử khung '{schedule_id}'."
-                )
-    
+                text = f"✅ Đã gửi thử khung '{schedule_id}'."
+
     # TRA KEYWORD BÌNH THƯỜNG
     else:
         try:
@@ -518,6 +506,7 @@ Tra cứu câu trả lời theo keyword
             text = f"⚠️ Em gặp lỗi khi tra cứu.\n{e}"
 
     reply_text(event.reply_token, text)
+
 
 
 if __name__ == "__main__":
