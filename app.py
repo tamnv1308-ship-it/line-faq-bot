@@ -273,30 +273,30 @@ def handle_message(event):
             user_id
         )
 
-    if user_text_lower in [
-    "bot ơi",
-    "bot oi",
-    "e bot",
-    "bot lol",
-]:
-    text = (
-        "👋 Dạ, em đây ạ.\n\n"
-        "Mình muốn em hỗ trợ gì?"
-    )
+        if user_text_lower in [
+        "bot ơi",
+        "bot oi",
+        "e bot",
+        "bot lol",
+    ]:
+        text = (
+            "👋 Dạ, em đây ạ.\n\n"
+            "Mình muốn em hỗ trợ gì?"
+        )
 
-    buttons = [
-        ("🔎 Tra cứu", f"{config.BOT_PREFIX}help"),
-        ("🔗 Join Group", f"{config.BOT_PREFIX}join"),
-        ("📚 Hướng dẫn", f"{config.BOT_PREFIX}help"),
-    ]
+        buttons = [
+            ("🔎 Tra cứu", f"{config.BOT_PREFIX}help"),
+            ("🔗 Join Group", f"{config.BOT_PREFIX}join"),
+            ("📚 Hướng dẫn", f"{config.BOT_PREFIX}help"),
+        ]
 
-    reply_with_buttons(
-        event.reply_token,
-        text,
-        buttons
-    )
+        reply_with_buttons(
+            event.reply_token,
+            text,
+            buttons
+        )
 
-    return
+        return
 
     if not user_text.startswith(config.BOT_PREFIX):
         return
