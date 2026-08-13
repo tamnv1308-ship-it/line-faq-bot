@@ -27,6 +27,7 @@ ADMIN_USER_IDS = [
     "Ud29d838c51efaecd363ff5bc9ffa2a4c",
     "U810ef43dc32d6cb1c3bb332f7aabad4c",
     "Ua7faef12dfde3213c23d01c34dfede91",
+    "Uf557568065b6debd6aa5c1ced009cbd6",
 ]
 
 REMINDER_SCHEDULES = [
