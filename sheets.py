@@ -1,144 +1,203 @@
-import time
-import gspread
 import json
+import re
+import time
+from collections import OrderedDict
 
+import gspread
 from google.oauth2.service_account import Credentials
-from gspread.exceptions import WorksheetNotFound
-from config import GOOGLE_SHEET_ID
-from config import GOOGLE_SERVICE_ACCOUNT
-from config import CACHE_TIME
 
-scope = [
-    "https://www.googleapis.com/auth/spreadsheets"
+import config
+
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
 ]
 
-credentials = Credentials.from_service_account_info(
-    json.loads(GOOGLE_SERVICE_ACCOUNT),
-    scopes=scope
-)
+_client = None
+_sheet_cache = None
+_sheet_cache_time = 0
 
-client = gspread.authorize(credentials)
 
-_cache = {}
-_last_update = 0
+def get_client():
+    global _client
+
+    if _client is not None:
+        return _client
+
+    if not config.GOOGLE_SERVICE_ACCOUNT:
+        raise ValueError("Thiếu GOOGLE_SERVICE_ACCOUNT_JSON trên Render.")
+
+    service_info = json.loads(config.GOOGLE_SERVICE_ACCOUNT)
+    credentials = Credentials.from_service_account_info(
+        service_info,
+        scopes=SCOPES,
+    )
+    _client = gspread.authorize(credentials)
+    return _client
+
+
+def get_spreadsheet():
+    if not config.GOOGLE_SHEET_ID:
+        raise ValueError("Thiếu GOOGLE_SHEET_ID trên Render.")
+
+    return get_client().open_by_key(config.GOOGLE_SHEET_ID)
 
 
 def load_sheet():
-
-    global _cache
-    global _last_update
+    """Đọc sheet FAQ cũ: cột A là keyword, cột B là câu trả lời."""
+    global _sheet_cache, _sheet_cache_time
 
     now = time.time()
+    if (
+        _sheet_cache is not None
+        and now - _sheet_cache_time < config.CACHE_TIME
+    ):
+        return _sheet_cache
 
-    if now - _last_update < CACHE_TIME:
-        return _cache
+    worksheet = get_spreadsheet().worksheet(config.FAQ_SHEET_NAME)
+    rows = worksheet.get_all_values()
 
-    sheet = client.open_by_key(GOOGLE_SHEET_ID)
+    result = {}
+    for row in rows[1:]:
+        if len(row) < 2:
+            continue
 
-    ws = sheet.sheet1
+        keyword = row[0].strip().lower()
+        answer = row[1].strip()
 
-    rows = ws.get_all_records()
+        if keyword and answer:
+            result[keyword] = answer
 
-    data = {}
+    _sheet_cache = result
+    _sheet_cache_time = now
+    return result
 
-    for row in rows:
 
-        keyword = str(row.get("Keyword", "")).strip().lower()
-
-        answer = str(row.get("Answer", "")).strip()
-
-        if keyword != "":
-            data[keyword] = answer
-
-    _cache = data
-
-    _last_update = now
-
-    return data
+def reload():
+    global _sheet_cache, _sheet_cache_time
+    _sheet_cache = None
+    _sheet_cache_time = 0
+    return load_sheet()
 
 
 def search(keyword):
-
-    keyword = keyword.lower()
-
     data = load_sheet()
+    keyword = keyword.strip().lower()
 
     if keyword in data:
         return data[keyword]
 
-    for key in data:
-
-        if keyword in key:
-
-            return data[key]
+    for key, answer in data.items():
+        if keyword in key or key in keyword:
+            return answer
 
     return None
 
 
-def reload():
+def parse_number(value):
+    """
+    Dùng cho số lượng và tiền từ Google Sheet.
+    Ví dụ: 1.200.000đ -> 1200000
+    """
+    if value is None:
+        return 0
 
-    global _last_update
+    text = str(value).strip()
+    if not text:
+        return 0
 
-    _last_update = 0
-
-    return load_sheet()
-    # ==============================
-# USERS SHEET
-# ==============================
-
-def get_users_sheet():
-
-    sheet = client.open_by_key(GOOGLE_SHEET_ID)
+    cleaned = re.sub(r"[^\d-]", "", text)
+    if cleaned in ("", "-"):
+        return 0
 
     try:
-        return sheet.worksheet("Users")
+        return int(cleaned)
+    except ValueError:
+        return 0
 
-    except WorksheetNotFound:
 
-        ws = sheet.add_worksheet(
-            title="Users",
-            rows=1000,
-            cols=2
+def product_group(product_name):
+    """Phân loại bằng nội dung cột Q."""
+    name = product_name.lower()
+
+    if "iphone" in name:
+        return "iPhone"
+    if "ipad" in name:
+        return "iPad"
+    if "mac" in name:
+        return "Mac"
+    if "apple watch" in name:
+        return "Apple Watch"
+    if "airpods" in name or "air pods" in name:
+        return "AirPods"
+
+    return "Phụ kiện còn lại"
+
+
+def get_sales_report():
+    """
+    DATA:
+    - H: trạng thái
+    - Q: tên hàng, dùng lọc trùng và phân nhóm
+    - V: số lượng
+    - AI: doanh thu
+    """
+    worksheet = get_spreadsheet().worksheet(config.REPORT_SHEET_NAME)
+    rows = worksheet.get_all_values()
+
+    groups = OrderedDict(
+        [
+            ("iPhone", {"quantity": 0, "revenue": 0}),
+            ("iPad", {"quantity": 0, "revenue": 0}),
+            ("Mac", {"quantity": 0, "revenue": 0}),
+            ("Apple Watch", {"quantity": 0, "revenue": 0}),
+            ("AirPods", {"quantity": 0, "revenue": 0}),
+            ("Phụ kiện còn lại", {"quantity": 0, "revenue": 0}),
+        ]
+    )
+
+    seen_products = set()
+    skipped_status = 0
+    skipped_duplicate = 0
+
+    # Bỏ hàng tiêu đề: dòng 1
+    for row in rows[1:]:
+        # AI là cột 35, index 34
+        padded = row + [""] * max(0, 35 - len(row))
+
+        status_h = padded[7].strip()
+        product_q = padded[16].strip()
+        quantity_v = parse_number(padded[21])
+        revenue_ai = parse_number(padded[34])
+
+        if status_h in {"Xuất bán nội bộ", "Xuất chuyển kho"}:
+            skipped_status += 1
+            continue
+
+        # Không có tên sản phẩm thì không thể lọc trùng/phân nhóm.
+        if not product_q:
+            continue
+
+        duplicate_key = product_q.casefold()
+        if duplicate_key in seen_products:
+            skipped_duplicate += 1
+            continue
+
+        seen_products.add(duplicate_key)
+
+        group_name = product_group(product_q)
+        groups[group_name]["quantity"] += quantity_v
+        groups[group_name]["revenue"] += revenue_ai
+
+    for data in groups.values():
+        quantity = data["quantity"]
+        data["average_price"] = (
+            round(data["revenue"] / quantity) if quantity else 0
         )
 
-        ws.update("A1:B1", [["DisplayName", "UserId"]])
-
-        return ws
-
-
-def save_user(display_name, user_id):
-
-    if not display_name or not user_id:
-        return
-
-    ws = get_users_sheet()
-
-    rows = ws.get_all_records()
-
-    for idx, row in enumerate(rows, start=2):
-
-        if row.get("UserId") == user_id:
-
-            ws.update(
-                f"A{idx}:B{idx}",
-                [[display_name, user_id]]
-            )
-
-            return
-
-    ws.append_row([display_name, user_id])
-
-
-def get_user_id(display_name):
-
-    ws = get_users_sheet()
-
-    rows = ws.get_all_records()
-
-    for row in rows:
-
-        if row["DisplayName"].strip().lower() == display_name.strip().lower():
-
-            return row["UserId"]
-
-    return None
+    return {
+        "groups": groups,
+        "unique_products": len(seen_products),
+        "skipped_status": skipped_status,
+        "skipped_duplicate": skipped_duplicate,
+    }
