@@ -69,7 +69,34 @@ REMINDER_SCHEDULES = [
         ],
     },
 ]
+REPORT_PUBLIC_BASE_URL = os.getenv(
+    "REPORT_PUBLIC_BASE_URL",
+    os.getenv("RENDER_EXTERNAL_URL", ""),
+).rstrip("/")
 
+FAQ_SHEET_NAME = "FAQ"
+REPORT_SHEET_NAME = "DATA"
+
+REPORT_SCHEDULES = [
+    {
+        "id": "report_1000",
+        "hour": 10,
+        "minute": 0,
+        "group_id": GROUPS["bot"],
+    },
+    {
+        "id": "report_1500",
+        "hour": 15,
+        "minute": 0,
+        "group_id": GROUPS["bot"],
+    },
+    {
+        "id": "report_2200",
+        "hour": 22,
+        "minute": 0,
+        "group_id": GROUPS["bot"],
+    },
+]
 # Lịch gửi ảnh report. Giờ theo Việt Nam.
 REPORT_SCHEDULES = [
     {
