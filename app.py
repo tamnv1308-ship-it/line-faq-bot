@@ -1,23 +1,27 @@
+import os
 import random
-
+import secrets
+import time
+from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, request, abort
+from flask import Flask, abort, request, send_from_directory
+from PIL import Image, ImageDraw, ImageFont
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.messaging import (
-    Configuration,
     ApiClient,
+    Configuration,
+    ImageMessage,
     MessagingApi,
-    ReplyMessageRequest,
     PushMessageRequest,
+    ReplyMessageRequest,
     TextMessage,
-    QuickReply,
-    QuickReplyItem,
-    MessageAction,
 )
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 import config
 import sheets
@@ -25,48 +29,22 @@ import sheets
 
 app = Flask(__name__)
 
-configuration = Configuration(
-    access_token=config.CHANNEL_ACCESS_TOKEN
-)
+configuration = Configuration(access_token=config.CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(config.CHANNEL_SECRET)
 
-handler = WebhookHandler(
-    config.CHANNEL_SECRET
-)
+REPORT_DIRECTORY = Path("report_images")
+REPORT_DIRECTORY.mkdir(exist_ok=True)
 
-group_name_cache = {}
-user_name_cache = {}
-
+VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 GREETING_MESSAGES = [
-    "👋 Dạ, em nghe đây.\n\nMình cần em hỗ trợ tra cứu gì ạ?",
-    "🙋 Em đây ạ.\n\nMình muốn tìm thông tin nào nè?",
-    "✨ Dạ có em.\n\nMình gõ keyword để em tìm giúp nhé.",
-    "🌟 Em sẵn sàng đây.\n\nMình cần tra cứu nội dung gì ạ?",
-]
-
-HELP_OPENINGS = [
-    f"🤖 {config.BOT_NAME} xin chào.",
-    f"📚 Dạ, đây là phần hướng dẫn của {config.BOT_NAME}.",
-    "📝 Em gửi mình các lệnh đang sử dụng được nhé.",
-]
-
-HELP_CLOSINGS = [
-    "💬 Mình cứ gửi câu lệnh, em tìm giúp ngay.",
-    "⚡ Gõ đúng keyword là em trả lời liền ạ.",
-    "🌈 Em luôn sẵn sàng hỗ trợ trong group.",
-]
-
-ANSWER_OPENINGS = [
-    "✅ Em tìm được thông tin này.",
-    "📌 Dạ, nội dung mình cần đây ạ.",
-    "💬 Em gửi mình câu trả lời nhé.",
-    "🔍 Thông tin tra cứu của mình đây.",
+    "👋 Dạ, em nghe đây. Mình cần em hỗ trợ gì ạ?",
+    "🙋 Em đây ạ. Mình muốn tìm thông tin nào nè?",
 ]
 
 NOT_FOUND_MESSAGES = [
     "😕 Em chưa tìm thấy keyword này.",
     "📭 Keyword này hiện chưa có trong dữ liệu của em.",
-    "🔎 Em chưa thấy nội dung phù hợp với keyword này.",
 ]
 
 
@@ -76,46 +54,199 @@ def push_to_group(group_id, text):
             MessagingApi(api_client).push_message(
                 PushMessageRequest(
                     to=group_id,
-                    messages=[
-                        TextMessage(text=text)
-                    ]
+                    messages=[TextMessage(text=text)],
                 )
             )
-
         return True, None
 
-    except Exception as e:
-        return False, str(e)
+    except Exception as error:
+        app.logger.error("Lỗi gửi LINE: %s", error)
+        return False, str(error)
+
+
+def push_image_to_group(group_id, image_url):
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).push_message(
+                PushMessageRequest(
+                    to=group_id,
+                    messages=[
+                        ImageMessage(
+                            original_content_url=image_url,
+                            preview_image_url=image_url,
+                        )
+                    ],
+                )
+            )
+        return True, None
+
+    except Exception as error:
+        app.logger.error("Lỗi gửi ảnh LINE: %s", error)
+        return False, str(error)
+
+
+def reply_text(reply_token, text):
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[TextMessage(text=text)],
+                )
+            )
+    except Exception as error:
+        app.logger.error("Lỗi reply LINE: %s", error)
+
+
+def format_number(value):
+    return f"{value:,.0f}".replace(",", ".")
+
+
+def get_font(size, bold=False):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    ]
+
+    for font_path in candidates:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except OSError:
+            continue
+
+    return ImageFont.load_default()
+
+
+def create_report_image():
+    report = sheets.get_sales_report()
+    now = datetime.now(VIETNAM_TZ)
+
+    width = 1500
+    row_height = 88
+    top_height = 240
+    bottom_height = 110
+    height = top_height + row_height * 7 + bottom_height
+
+    image = Image.new("RGB", (width, height), "#F5F7FB")
+    draw = ImageDraw.Draw(image)
+
+    title_font = get_font(46, bold=True)
+    subtitle_font = get_font(27)
+    header_font = get_font(25, bold=True)
+    body_font = get_font(27)
+    footer_font = get_font(22)
+
+    navy = "#12263F"
+    blue = "#0068FF"
+    white = "#FFFFFF"
+    line = "#D8E0EA"
+    text = "#172B4D"
+
+    draw.rectangle((0, 0, width, top_height), fill=navy)
+    draw.text((65, 52), "BÁO CÁO BÁN HÀNG", font=title_font, fill=white)
+
+    time_text = now.strftime("Ngày %d/%m/%Y - %H:%M")
+    draw.text((65, 122), time_text, font=subtitle_font, fill="#D8E8FF")
+
+    columns = [
+        ("Nhóm hàng", 65, 470),
+        ("Tổng cột V", 500, 730),
+        ("Tổng cột AI", 770, 1080),
+        ("TB giá bán", 1120, 1425),
+    ]
+
+    header_y = top_height
+    draw.rectangle((0, header_y, width, header_y + row_height), fill=blue)
+
+    for label, start_x, _ in columns:
+        draw.text(
+            (start_x, header_y + 27),
+            label,
+            font=header_font,
+            fill=white,
+        )
+
+    y = header_y + row_height
+    for index, (name, values) in enumerate(report["groups"].items()):
+        background = white if index % 2 == 0 else "#EDF3FA"
+        draw.rectangle((0, y, width, y + row_height), fill=background)
+        draw.line((0, y + row_height, width, y + row_height), fill=line, width=1)
+
+        draw.text((65, y + 27), name, font=body_font, fill=text)
+
+        quantity = format_number(values["quantity"])
+        revenue = format_number(values["revenue"])
+        average = format_number(values["average_price"])
+
+        draw.text((730, y + 27), quantity, font=body_font, fill=text, anchor="ra")
+        draw.text((1080, y + 27), revenue, font=body_font, fill=text, anchor="ra")
+        draw.text((1425, y + 27), average, font=body_font, fill=text, anchor="ra")
+
+        y += row_height
+
+    footer = (
+        f"Đã lọc {report['skipped_status']} dòng trạng thái nội bộ/chuyển kho"
+        f" · Bỏ {report['skipped_duplicate']} dòng trùng cột Q"
+    )
+    draw.text((65, y + 38), footer, font=footer_font, fill="#52667A")
+
+    filename = (
+        f"report_{now.strftime('%Y%m%d_%H%M%S')}_"
+        f"{secrets.token_urlsafe(12)}.png"
+    )
+    output_path = REPORT_DIRECTORY / filename
+    image.save(output_path, "PNG", optimize=True)
+
+    return filename
+
+
+def clean_old_report_images():
+    expiry = time.time() - 7 * 24 * 60 * 60
+
+    for image_path in REPORT_DIRECTORY.glob("*.png"):
+        try:
+            if image_path.stat().st_mtime < expiry:
+                image_path.unlink()
+        except OSError:
+            pass
+
+
+def send_sales_report(group_id):
+    if not config.REPORT_PUBLIC_BASE_URL:
+        raise ValueError(
+            "Thiếu REPORT_PUBLIC_BASE_URL trên Render."
+        )
+
+    clean_old_report_images()
+    filename = create_report_image()
+
+    image_url = (
+        f"{config.REPORT_PUBLIC_BASE_URL}/report-images/{filename}"
+    )
+    success, error = push_image_to_group(group_id, image_url)
+
+    if not success:
+        raise RuntimeError(error)
+
+    return image_url
 
 
 def send_reminders(reminders):
     for reminder in reminders:
-        success, error = push_to_group(
-            reminder["group_id"],
-            reminder["message"]
-        )
-
-        if success:
-            app.logger.warning(
-                "Đã gửi nhắc: %s",
-                reminder["group_id"]
-            )
-        else:
-            app.logger.error(
-                "Lỗi gửi group %s: %s",
-                reminder["group_id"],
-                error
-            )
+        push_to_group(reminder["group_id"], reminder["message"])
 
 
-def send_all_reminders():
-    for schedule in config.REMINDER_SCHEDULES:
-        send_reminders(schedule["reminders"])
+def run_scheduled_report(group_id):
+    try:
+        image_url = send_sales_report(group_id)
+        app.logger.warning("Đã gửi report: %s", image_url)
+    except Exception as error:
+        app.logger.exception("Không gửi được report: %s", error)
 
 
-scheduler = BackgroundScheduler(
-    timezone=ZoneInfo("Asia/Ho_Chi_Minh")
-)
+scheduler = BackgroundScheduler(timezone=VIETNAM_TZ)
 
 for schedule in config.REMINDER_SCHEDULES:
     scheduler.add_job(
@@ -126,7 +257,19 @@ for schedule in config.REMINDER_SCHEDULES:
         args=[schedule["reminders"]],
         id=f"reminder_{schedule['id']}",
         replace_existing=True,
-        max_instances=1
+        max_instances=1,
+    )
+
+for schedule in config.REPORT_SCHEDULES:
+    scheduler.add_job(
+        run_scheduled_report,
+        trigger="cron",
+        hour=schedule["hour"],
+        minute=schedule["minute"],
+        args=[schedule["group_id"]],
+        id=f"report_{schedule['id']}",
+        replace_existing=True,
+        max_instances=1,
     )
 
 scheduler.start()
@@ -137,6 +280,11 @@ def home():
     return "LINE FAQ BOT is running."
 
 
+@app.route("/report-images/<filename>")
+def report_image(filename):
+    return send_from_directory(REPORT_DIRECTORY, filename)
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")
@@ -144,158 +292,19 @@ def callback():
 
     try:
         handler.handle(body, signature)
-
     except InvalidSignatureError:
         abort(400)
 
     return "OK"
 
 
-def reply_text(reply_token, text):
-    try:
-        with ApiClient(configuration) as api_client:
-            MessagingApi(api_client).reply_message(
-                ReplyMessageRequest(
-                    reply_token=reply_token,
-                    messages=[
-                        TextMessage(text=text)
-                    ]
-                )
-            )
-
-    except Exception as e:
-        app.logger.error("Reply Error: %s", e)
-
-def reply_with_buttons(reply_token, text, buttons):
-    """
-    Gửi text kèm các nút Quick Reply.
-
-    buttons:
-    [
-        ("Tên nút", "Nội dung bot sẽ nhận"),
-        ...
-    ]
-    """
-
-    items = []
-
-    for label, message in buttons:
-        items.append(
-            QuickReplyItem(
-                action=MessageAction(
-                    label=label,
-                    text=message
-                )
-            )
-        )
-
-    try:
-        with ApiClient(configuration) as api_client:
-            MessagingApi(api_client).reply_message(
-                ReplyMessageRequest(
-                    reply_token=reply_token,
-                    messages=[
-                        TextMessage(
-                            text=text,
-                            quick_reply=QuickReply(
-                                items=items
-                            )
-                        )
-                    ]
-                )
-            )
-
-    except Exception as e:
-        app.logger.error("Reply Quick Reply Error: %s", e)
-
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
-    user_text_lower = user_text.lower()
-
-    group_id = getattr(event.source, "group_id", None)
-    room_id = getattr(event.source, "room_id", None)
     user_id = getattr(event.source, "user_id", None)
 
-    chat_id = group_id or room_id
-    group_name = "Chat riêng"
-    user_name = "Không lấy được tên"
-
-    if chat_id:
-        group_name = group_name_cache.get(
-            chat_id,
-            "Không lấy được tên group"
-        )
-
-        user_cache_key = (chat_id, user_id)
-        user_name = user_name_cache.get(
-            user_cache_key,
-            "Không lấy được tên user"
-        )
-
-        try:
-            if (
-                chat_id not in group_name_cache
-                or user_cache_key not in user_name_cache
-            ):
-                with ApiClient(configuration) as api_client:
-                    bot = MessagingApi(api_client)
-
-                    if group_id and chat_id not in group_name_cache:
-                        group = bot.get_group_summary(group_id)
-                        group_name = group.group_name
-                        group_name_cache[chat_id] = group_name
-
-                    if user_id and user_cache_key not in user_name_cache:
-                        if group_id:
-                            profile = bot.get_group_member_profile(
-                                group_id,
-                                user_id
-                            )
-                        else:
-                            profile = bot.get_room_member_profile(
-                                room_id,
-                                user_id
-                            )
-
-                        user_name = profile.display_name
-                        user_name_cache[user_cache_key] = user_name
-
-        except Exception as e:
-            app.logger.warning("Không lấy được tên: %s", e)
-
-        app.logger.warning(
-            "GROUP: %s | GROUP ID: %s | "
-            "USER: %s | USER ID: %s",
-            group_name,
-            chat_id,
-            user_name,
-            user_id
-        )
-
-    # MENU KHI NGƯỜI DÙNG GỌI BOT
-    if user_text_lower in [
-        "bot ơi",
-        "bot oi",
-        "e bot",
-        "bot lol",
-    ]:
-        text = (
-            "👋 Dạ, em đây ạ.\n\n"
-            "Mình muốn em hỗ trợ gì?"
-        )
-
-        buttons = [
-            ("🔎 Tra cứu", f"{config.BOT_PREFIX}help"),
-            ("🔗 Join Group", f"{config.BOT_PREFIX}join"),
-            ("📚 Hướng dẫn", f"{config.BOT_PREFIX}help"),
-        ]
-
-        reply_with_buttons(
-            event.reply_token,
-            text,
-            buttons
-        )
+    if user_text.lower() in {"bot ơi", "bot oi", "e bot"}:
+        reply_text(event.reply_token, random.choice(GREETING_MESSAGES))
         return
 
     if not user_text.startswith(config.BOT_PREFIX):
@@ -305,14 +314,7 @@ def handle_message(event):
     command_lower = command.lower()
     command_name = command_lower.split(maxsplit=1)[0] if command_lower else ""
 
-    admin_commands = [
-        "list",
-        "reload",
-        "sendall",
-        "send",
-        "say",
-        "test",
-    ]
+    admin_commands = {"reload", "test", "testreport", "sendall"}
 
     if (
         command_name in admin_commands
@@ -320,198 +322,63 @@ def handle_message(event):
     ):
         return
 
-    # HELP
-    if command_lower in ["help", ""]:
-        text = f"""
-{random.choice(HELP_OPENINGS)}
+    if command_lower in {"", "help"}:
+        text = (
+            f"🤖 {config.BOT_NAME}\n\n"
+            f"🔎 {config.BOT_PREFIX}<keyword>: tra cứu\n"
+            f"📊 {config.BOT_PREFIX}testreport: gửi thử report"
+        )
 
-━━━━━━━━━━━━━━
-📌 CÁC LỆNH HIỆN CÓ
-━━━━━━━━━━━━━━
-
-🔎 {config.BOT_PREFIX}<keyword>
-Tra cứu câu trả lời theo keyword
-
-{random.choice(HELP_CLOSINGS)}
-""".strip()
-
-    # LỆNH NỘI BỘ: GỬI TẤT CẢ GROUP
-    elif command_lower == "sendall":
-        send_all_reminders()
-        text = "✅ Đã gửi thông báo đến các group đã thiết lập."
-
-    # LỆNH NỘI BỘ: GỬI KEYWORD SANG GROUP KHÁC
-    elif command_name == "send":
-        parts = command.split(maxsplit=2)
-
-        if len(parts) < 3:
-            text = (
-                "⚠️ Cú pháp chưa đúng.\n\n"
-                f"{config.BOT_PREFIX}send <mã group> <keyword>"
-            )
-        else:
-            group_key = parts[1].lower()
-            keyword = parts[2]
-
-            group_id = config.GROUPS.get(group_key)
-            result = sheets.search(keyword)
-
-            if not group_id:
-                text = f"⚠️ Không tìm thấy mã group: {group_key}"
-
-            elif result is None:
-                text = f"⚠️ Không tìm thấy keyword: {keyword}"
-
-            else:
-                success, error = push_to_group(group_id, result)
-
-                if success:
-                    text = (
-                        f"✅ Đã gửi keyword '{keyword}' "
-                        f"đến group '{group_key}'."
-                    )
-                else:
-                    text = f"⚠️ Gửi tin không thành công.\n{error}"
-
-    # LỆNH NỘI BỘ: GỬI NỘI DUNG TỰ VIẾT SANG GROUP KHÁC
-    elif command_name == "say":
-        payload = command[3:].strip()
-        group_key, separator, message = payload.partition("|")
-
-        group_key = group_key.strip().lower()
-        message = message.strip()
-
-        if not separator or not group_key or not message:
-            text = (
-                "⚠️ Cú pháp chưa đúng.\n\n"
-                f"{config.BOT_PREFIX}say <mã group> | <nội dung>"
-            )
-        else:
-            group_id = config.GROUPS.get(group_key)
-
-            if not group_id:
-                text = f"⚠️ Không tìm thấy mã group: {group_key}"
-
-            else:
-                success, error = push_to_group(group_id, message)
-
-                if success:
-                    text = (
-                        f"✅ Đã gửi nội dung đến group "
-                        f"'{group_key}'."
-                    )
-                else:
-                    text = f"⚠️ Gửi tin không thành công.\n{error}"
-
-    # LỆNH NỘI BỘ: LIST
-    elif command_lower == "list":
-        try:
-            data = sheets.load_sheet()
-
-            if not data:
-                text = "📭 Hiện tại chưa có keyword nào."
-            else:
-                text = "📚 Danh sách keyword\n\n"
-                text += "\n".join(
-                    f"• {key}" for key in sorted(data.keys())
-                )
-
-        except Exception as e:
-            text = f"⚠️ Không đọc được dữ liệu.\n{e}"
-
-    # LỆNH NỘI BỘ: RELOAD
     elif command_lower == "reload":
+        sheets.reload()
+        text = "✅ Đã cập nhật lại dữ liệu FAQ."
+
+    elif command_lower == "sendall":
+        for schedule in config.REMINDER_SCHEDULES:
+            send_reminders(schedule["reminders"])
+        text = "✅ Đã gửi các thông báo đã thiết lập."
+
+    elif command_lower == "testreport":
         try:
-            sheets.reload()
-            text = "✅ Dữ liệu đã được cập nhật."
+            image_url = send_sales_report(config.GROUPS["bot"])
+            text = f"✅ Đã gửi report thử vào group BOT.\n{image_url}"
+        except Exception as error:
+            text = f"⚠️ Không gửi được report.\n{error}"
 
-        except Exception as e:
-            text = f"⚠️ Không thể cập nhật dữ liệu.\n{e}"
-
-    # LỆNH JOIN GROUP
-    elif command_name == "join":
-        parts = command.split(maxsplit=1)
-
-        if len(parts) == 1:
-            text = "📌 Chọn khu vực cần tham gia:"
-
-            buttons = [
-                ("🤖 Bot", f"{config.BOT_PREFIX}join bot"),
-                ("🧪 Test", f"{config.BOT_PREFIX}join test"),
-            ]
-
-            reply_with_buttons(
-                event.reply_token,
-                text,
-                buttons
-            )
-            return
-
-        area = parts[1].strip().lower()
-        link = config.JOIN_LINKS.get(area)
-
-        if link:
-            text = (
-                f"👉 Link tham gia nhóm {area.upper()}:\n\n"
-                f"{link}"
-            )
-        else:
-            text = (
-                "❌ Không tìm thấy khu vực.\n\n"
-                "Các khu vực hỗ trợ:\n"
-                "• bot\n"
-                "• test\n"
-            )
-
-    # TEST KHUNG GIỜ NHẮC
     elif command_name == "test":
         parts = command.split(maxsplit=1)
-
         if len(parts) < 2:
-            text = "⚠️ Gõ: !test <keyword>"
+            text = "⚠️ Gõ: !test <mã khung giờ>"
         else:
             schedule_id = parts[1].lower()
-
             schedule = next(
                 (
                     item
                     for item in config.REMINDER_SCHEDULES
                     if item["id"] == schedule_id
                 ),
-                None
+                None,
             )
 
             if schedule is None:
-                text = f"⚠️ Không tìm thấy khung giờ: {schedule_id}"
+                text = "⚠️ Không tìm thấy khung giờ."
             else:
                 send_reminders(schedule["reminders"])
-                text = f"✅ Đã gửi thử khung '{schedule_id}'."
+                text = f"✅ Đã gửi thử khung {schedule_id}."
 
-    # TRA KEYWORD BÌNH THƯỜNG
     else:
-        try:
-            result = sheets.search(command)
+        result = sheets.search(command)
 
-            if result is None:
-                text = random.choice(NOT_FOUND_MESSAGES)
-                text += (
-                    f"\n\n🔍 Keyword mình vừa tìm: {command}"
-                    "\n\n💡 Mình thử kiểm tra lại cách viết nhé."
-                )
-            else:
-                text = random.choice(ANSWER_OPENINGS)
-                text += f"\n\n{result}"
-
-        except Exception as e:
-            text = f"⚠️ Em gặp lỗi khi tra cứu.\n{e}"
+        if result is None:
+            text = (
+                f"{random.choice(NOT_FOUND_MESSAGES)}\n\n"
+                f"🔍 Keyword: {command}"
+            )
+        else:
+            text = f"✅ Em tìm được thông tin:\n\n{result}"
 
     reply_text(event.reply_token, text)
 
 
-
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False
-    )
+    app.run(host="0.0.0.0", port=5000, debug=False)
