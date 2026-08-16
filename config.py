@@ -1,14 +1,26 @@
 import os
 
+
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "")
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "")
 
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 GOOGLE_SERVICE_ACCOUNT = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
+# Tự lấy link Render nếu có. Nếu report không gửi được ảnh,
+# tạo Environment Variable REPORT_PUBLIC_BASE_URL trên Render.
+REPORT_PUBLIC_BASE_URL = os.getenv(
+    "REPORT_PUBLIC_BASE_URL",
+    os.getenv("RENDER_EXTERNAL_URL", ""),
+).rstrip("/")
+
 BOT_PREFIX = "!"
 CACHE_TIME = 300
 BOT_NAME = "LINE FAQ BOT"
+
+# Tab cũ dùng để tra keyword và tab DATA dùng để làm report.
+FAQ_SHEET_NAME = os.getenv("FAQ_SHEET_NAME", "FAQ")
+REPORT_SHEET_NAME = "DATA"
 
 GROUPS = {
     "bot": "Ca6ebad8571ec436ed0cc4a68729d22c0",
@@ -37,8 +49,11 @@ REMINDER_SCHEDULES = [
         "minute": 0,
         "reminders": [
             {
-                "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
-                "message": "☀️ Chào buổi sáng mọi người, hẹ hẹ hẹ.\nChúc cả group một ngày chạy deadline té địt nhớ !!!.",
+                "group_id": GROUPS["bot"],
+                "message": (
+                    "☀️ Chào buổi sáng mọi người, hẹ hẹ hẹ.\n"
+                    "Chúc cả group một ngày chạy deadline té địt nhớ !!!."
+                ),
             },
         ],
     },
@@ -48,9 +63,31 @@ REMINDER_SCHEDULES = [
         "minute": 0,
         "reminders": [
             {
-                "group_id": "Ca6ebad8571ec436ed0cc4a68729d22c0",
+                "group_id": GROUPS["bot"],
                 "message": "🌙 Con đỗn Boa, thoát nhóm ra vào lại nhá nhanh lên nàoo!.",
             },
         ],
+    },
+]
+
+# Lịch gửi ảnh report. Giờ theo Việt Nam.
+REPORT_SCHEDULES = [
+    {
+        "id": "report_1000",
+        "hour": 10,
+        "minute": 0,
+        "group_id": GROUPS["bot"],
+    },
+    {
+        "id": "report_1500",
+        "hour": 15,
+        "minute": 0,
+        "group_id": GROUPS["bot"],
+    },
+    {
+        "id": "report_2200",
+        "hour": 22,
+        "minute": 0,
+        "group_id": GROUPS["bot"],
     },
 ]
