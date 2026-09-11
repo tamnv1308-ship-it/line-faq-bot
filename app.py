@@ -383,3 +383,48 @@ def handle_message(event):
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
 
+
+
+# Phiên bản báo cáo Apple: tồn kho, sức bán, doanh thu và cảnh báo.
+def create_report_image():
+    report = sheets.get_apple_dashboard()
+    now = datetime.now(VIETNAM_TZ)
+    width, row_height, top_height, bottom_height = 1700, 88, 240, 115
+    height = top_height + row_height * (len(report["groups"]) + 1) + bottom_height
+    image = Image.new("RGB", (width, height), "#F5F7FB")
+    draw = ImageDraw.Draw(image)
+    title_font = get_font(44, bold=True)
+    subtitle_font = get_font(25)
+    header_font = get_font(23, bold=True)
+    body_font = get_font(25)
+    footer_font = get_font(20)
+    navy, blue, white, line, text = "#12263F", "#0068FF", "#FFFFFF", "#D8E0EA", "#172B4D"
+
+    draw.rectangle((0, 0, width, top_height), fill=navy)
+    draw.text((58, 50), "APPLE — TỒN KHO & BÁN HÀNG", font=title_font, fill=white)
+    draw.text((58, 120), now.strftime("Cập nhật %d/%m/%Y - %H:%M"), font=subtitle_font, fill="#D8E8FF")
+    draw.text((58, 160), f"Tồn kho: {report['inventory_updated_at']}", font=subtitle_font, fill="#D8E8FF")
+
+    columns = [("Nhóm Apple", 58), ("Tồn", 650), ("SL bán", 865), ("Doanh thu", 1110), ("Cảnh báo", 1510)]
+    y = top_height
+    draw.rectangle((0, y, width, y + row_height), fill=blue)
+    for label, x in columns:
+        draw.text((x, y + 27), label, font=header_font, fill=white)
+    y += row_height
+
+    for index, item in enumerate(report["groups"]):
+        background = white if index % 2 == 0 else "#EDF3FA"
+        draw.rectangle((0, y, width, y + row_height), fill=background)
+        draw.line((0, y + row_height, width, y + row_height), fill=line, width=1)
+        alert_color = "#C62828" if item["alert"] != "Bình thường" else "#1B7F3A"
+        draw.text((58, y + 27), item["group"], font=body_font, fill=text)
+        draw.text((790, y + 27), format_number(item["inventory"]), font=body_font, fill=text, anchor="ra")
+        draw.text((1005, y + 27), format_number(item["quantity"]), font=body_font, fill=text, anchor="ra")
+        draw.text((1375, y + 27), format_number(item["revenue"]), font=body_font, fill=text, anchor="ra")
+        draw.text((1510, y + 27), item["alert"], font=body_font, fill=alert_color)
+        y += row_height
+
+    draw.text((58, y + 36), "Cảnh báo Tồn cao: tồn >= 30 và lớn hơn 10 lần SL bán.", font=footer_font, fill="#52667A")
+    filename = f"apple_dashboard_{now.strftime('%Y%m%d_%H%M%S')}_{secrets.token_urlsafe(12)}.png"
+    image.save(REPORT_DIRECTORY / filename, "PNG", optimize=True)
+    return filename
