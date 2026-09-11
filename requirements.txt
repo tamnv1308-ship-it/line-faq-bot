@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 rapidfuzz==3.9.7
 APScheduler==3.10.4
 Pillow==10.4.0
+openpyxl==3.1.5
