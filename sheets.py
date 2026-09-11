@@ -174,3 +174,8 @@ def get_apple_dashboard():
             alert = "Bình thường"
         dashboard.append({"group": group, "inventory": stock, "quantity": sold, "revenue": revenue, "alert": alert})
     return {"groups": dashboard, "inventory_updated_at": inventory["updated_at"], "unique_products": sales["unique_products"]}
+
+
+# Tương thích với các lệnh bot hiện có.
+reload = reload_sheet
+search = search_answer
