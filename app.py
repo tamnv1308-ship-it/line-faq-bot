@@ -25,6 +25,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 import config
 import sheets
+import co_flow
 
 
 app = Flask(__name__)
@@ -272,6 +273,25 @@ for schedule in config.REPORT_SCHEDULES:
         max_instances=1,
     )
 
+def push_co_result(chat, text, retry_key):
+    import urllib.request
+    import urllib.error
+    import json
+    payload = json.dumps({'to': chat, 'messages': [{'type': 'text', 'text': text}]}).encode()
+    req = urllib.request.Request('https://api.line.me/v2/bot/message/push', data=payload,
+        headers={'Authorization': 'Bearer ' + config.CHANNEL_ACCESS_TOKEN,
+                 'Content-Type': 'application/json', 'X-Line-Retry-Key': retry_key})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            return response.status == 200
+    except urllib.error.HTTPError as error:
+        return error.code == 409 and bool(error.headers.get('X-Line-Accepted-Request-Id'))
+    except Exception:
+        app.logger.warning('CO result delivery failed; will retry.')
+        return False
+
+handle_co, notify_co = co_flow.install(app, reply_text, push_co_result, config.ADMIN_USER_IDS)
+scheduler.add_job(notify_co, 'interval', seconds=20, id='co_result_notifications', max_instances=1)
 scheduler.start()
 
 
@@ -300,6 +320,8 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    if handle_co(event):
+        return
     user_text = event.message.text.strip()
     user_id = getattr(event.source, "user_id", None)
 

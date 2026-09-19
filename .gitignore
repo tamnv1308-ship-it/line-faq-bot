@@ -1,0 +1,7 @@
+.env
+.venv/
+.co-mac/
+__pycache__/
+*.db
+*.db-*
+report_images/
