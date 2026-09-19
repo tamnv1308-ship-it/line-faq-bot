@@ -80,8 +80,7 @@ class Queue:
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
             if old:
                 return dict(old)
-            # A new form replaces unconfirmed drafts only; submitted jobs remain intact.
-            db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE owner=? AND chat=? AND state='draft'", (now,owner,chat))
+            # Keep each preview pending so the owner can confirm several forms together.
             jid = secrets.token_hex(5)
             db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated) VALUES(?,?,?,?,?,?,?,?)',
                        (jid,event,owner,chat,json.dumps(payload,ensure_ascii=False),'draft',now,now))
@@ -100,6 +99,24 @@ class Queue:
             state = 'cancelled' if cancel else 'queued'
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
             return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.'
+
+    def confirm_all(self, owner, chat, cancel=False):
+        now = time.time()
+        with self.db() as db:
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE owner=? AND chat=? AND state='draft' AND created<?",
+                       (now,owner,chat,now-900))
+            jobs = db.execute("SELECT id FROM jobs WHERE owner=? AND chat=? AND state='draft' ORDER BY created,id",
+                              (owner,chat)).fetchall()
+            if not jobs:
+                return 'Không có yêu cầu còn hiệu lực đang chờ xác nhận của bạn trong cuộc chat này.'
+            state = 'cancelled' if cancel else 'queued'
+            db.execute("UPDATE jobs SET state=?,updated=? WHERE owner=? AND chat=? AND state='draft'",
+                       (state,now,owner,chat))
+            action = 'Đã hủy' if cancel else 'Đã xác nhận'
+            message = f'{action} {len(jobs)} yêu cầu đang chờ của bạn trong cuộc chat này.'
+            if not cancel:
+                message += ' Máy Mac sẽ xử lý lần lượt và trả kết quả từng yêu cầu.'
+            return message
 
     def claim(self):
         with self.db() as db:
@@ -239,11 +256,15 @@ def install(app, reply, push, default_users=()):
                 preview=(f"Xác nhận tạo CO — {jid}\nKho xuất: {p['source']}\nKho nhận: {p['destination']}\n"
                          f"Mã sản phẩm: {p['product']}\nSố lượng: {p['quantity']}\nNote: {p['note']}\n"
                          f"Thương hiệu: TGDD, DMX, TopZone\n\nGửi XACNHAN {jid} để tạo.\n"
-                         f"Gửi SUA {jid} để hủy bản này và gửi form sửa; HUY {jid} để hủy.\nHiệu lực: 15 phút.")
+                         f"Gửi SUA {jid} để hủy bản này và gửi form sửa; HUY {jid} để hủy.\n"
+                         "XACNHAN ALL / HUY ALL: xác nhận / hủy tất cả yêu cầu đang chờ của bạn trong chat này.\nHiệu lực: 15 phút.")
                 reply(event.reply_token,preview)
             else:
                 command,jid=text.split(maxsplit=1)
-                reply(event.reply_token,queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN'))
+                if jid.strip().upper() == 'ALL' and command.upper() in {'XACNHAN','HUY'}:
+                    reply(event.reply_token,queue.confirm_all(owner,chat,command.upper()=='HUY'))
+                else:
+                    reply(event.reply_token,queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN'))
         except ValueError as error:
             reply(event.reply_token,f'Form chưa hợp lệ: {error}\nVui lòng sửa và gửi lại.')
         return True

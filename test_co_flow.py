@@ -16,6 +16,32 @@ class QueueTests(unittest.TestCase):
         self.tmp.cleanup()
     def draft(self):
         return self.q.draft('event','owner','group',self.p)
+    def test_all_scoped_and_repeat_safe(self):
+        first=self.q.draft('one','owner','group',self.p)
+        second=self.q.draft('two','owner','group',self.p)
+        self.q.draft('three','other','group',self.p)
+        self.q.draft('four','owner','elsewhere',self.p)
+        self.assertIn('2 yêu cầu',self.q.confirm_all('owner','group'))
+        self.assertIn('Không có',self.q.confirm_all('owner','group'))
+        with self.q.db() as db:
+            states={r['id']:r['state'] for r in db.execute('SELECT * FROM jobs')}
+        self.assertEqual(states[first['id']],'queued')
+        self.assertEqual(states[second['id']],'queued')
+        self.assertEqual(list(states.values()).count('draft'),2)
+    def test_cancel_all_keeps_confirmed_and_expires_old(self):
+        old=self.q.draft('old','owner','group',self.p)
+        with self.q.db() as db:
+            db.execute('UPDATE jobs SET created=created-901 WHERE id=?',(old['id'],))
+        ready=self.q.draft('ready','owner','group',self.p)
+        self.q.confirm(ready['id'],'owner','group')
+        waiting=self.q.draft('waiting','owner','group',self.p)
+        self.assertIn('Đã hủy 1',self.q.confirm_all('owner','group',True))
+        with self.q.db() as db:
+            states={r['id']:r['state'] for r in db.execute('SELECT * FROM jobs')}
+        self.assertEqual(states[old['id']],'expired')
+        self.assertEqual(states[ready['id']],'queued')
+        self.assertEqual(states[waiting['id']],'cancelled')
+
     def test_parser(self):
         self.assertEqual(self.p['product'],'0131491005424')
         for bad in [FORM.replace('Số lượng: 1','Số lượng: 0'),FORM+'\nKho xuất: 1',FORM.replace('Kho nhận: 10341','Kho nhận: 645')]:
