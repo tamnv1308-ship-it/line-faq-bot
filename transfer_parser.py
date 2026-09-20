@@ -50,7 +50,9 @@ def parse_form(text):
         raise ValueError('Tin nhắn quá dài; vui lòng gửi mỗi yêu cầu trong một tin nhắn ngắn hơn.')
     values={}; notes=[]
     for key,value in parts(text):
-        if key is None or key=='note':
+        if key is None:
+            continue
+        if key=='note':
             if value:
                 notes.append(value)
             continue

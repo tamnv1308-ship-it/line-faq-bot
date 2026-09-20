@@ -16,11 +16,12 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(is_transfer_message(SAMPLE))
         with self.assertRaisesRegex(ValueError,'Thiếu Số lượng'):
             parse_form(SAMPLE)
-    def test_user_sample_complete_preserves_notes(self):
+    def test_user_sample_complete_ignores_unlabelled_notes(self):
         p=parse_form(SAMPLE+'\nSL: 1 máy')
         self.assertEqual((p['source'],p['destination'],p['product'],p['quantity']),('2533','315','0131491005420',1))
-        self.assertIn('Người A -',p['note'])
-        self.assertIn('@Người E 282210',p['note'])
+        self.assertEqual(p['note'],'')
+        p=parse_form(SAMPLE+'\nSL: 1 máy\nNote: chuyển gấp\nNhờ @Người F hỗ trợ\nGhi chú: khách đợi')
+        self.assertEqual(p['note'],'chuyển gấp\nkhách đợi')
     def test_variants(self):
         for text in ['KHO XUẤT：2533; Kho nhập = 315 | MSP: 0131491005420; SL: 1',
                      '• kho xuat 2533\n- kho nhan 315\n* ma sp 0131491005420\nso luong 1 chiếc',
