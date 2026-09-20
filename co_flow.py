@@ -91,6 +91,11 @@ class Queue:
             job = db.execute('SELECT * FROM jobs WHERE id=? AND owner=? AND chat=?',(jid,owner,chat)).fetchone()
             if not job:
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
+            if cancel and job['state'] == 'queued':
+                db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=?",(time.time(),jid))
+                return f'Đã hủy yêu cầu chờ {jid}; Mac sẽ không tạo yêu cầu này.'
+            if cancel and job['state'] in {'running','submitting','unknown'}:
+                return 'Không thể hủy: yêu cầu đang được xử lý hoặc chưa rõ kết quả. Cần kiểm tra MWG để tránh tạo trùng.'
             if job['state'] != 'draft':
                 return 'Yêu cầu đã được xử lý hoặc hủy; không tạo thêm bản trùng.'
             if time.time() - job['created'] > 900:
@@ -98,7 +103,7 @@ class Queue:
                 return 'Xác nhận đã hết hạn. Vui lòng gửi lại form.'
             state = 'cancelled' if cancel else 'queued'
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
-            return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.'
+            return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.' + self.blocked_notice(db)
 
     def confirm_all(self, owner, chat, cancel=False):
         now = time.time()
@@ -115,8 +120,25 @@ class Queue:
             action = 'Đã hủy' if cancel else 'Đã xác nhận'
             message = f'{action} {len(jobs)} yêu cầu đang chờ của bạn trong cuộc chat này.'
             if not cancel:
-                message += ' Máy Mac sẽ xử lý lần lượt và trả kết quả từng yêu cầu.'
+                message += ' Máy Mac sẽ xử lý lần lượt và trả kết quả từng yêu cầu.' + self.blocked_notice(db)
             return message
+
+    def blocked_notice(self, db):
+        if db.execute("SELECT 1 FROM jobs WHERE state='unknown'").fetchone():
+            return ('\nHàng đợi hiện bị tạm dừng vì có yêu cầu chưa rõ kết quả trên MWG. '
+                    'Cần đối soát trước khi chạy tiếp. Gửi HUY CHO nếu muốn hủy các yêu cầu chưa được Mac nhận.')
+        return ''
+
+    def cancel_waiting(self, owner, chat):
+        with self.db() as db:
+            count = db.execute("SELECT COUNT(*) AS n FROM jobs WHERE owner=? AND chat=? AND state='queued'",
+                               (owner,chat)).fetchone()['n']
+            db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE owner=? AND chat=? AND state='queued'",
+                       (time.time(),owner,chat))
+            message = (f'Đã hủy {count} yêu cầu đã xác nhận nhưng chưa được Mac nhận trong cuộc chat này.'
+                       if count else 'Không có yêu cầu đã xác nhận đang chờ Mac của bạn trong cuộc chat này.')
+            message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
+            return message + self.blocked_notice(db)
 
     def claim(self):
         with self.db() as db:
@@ -257,11 +279,13 @@ def install(app, reply, push, default_users=()):
                          f"Mã sản phẩm: {p['product']}\nSố lượng: {p['quantity']}\nNote: {p['note']}\n"
                          f"Thương hiệu: TGDD, DMX, TopZone\n\nGửi XACNHAN {jid} để tạo.\n"
                          f"Gửi SUA {jid} để hủy bản này và gửi form sửa; HUY {jid} để hủy.\n"
-                         "XACNHAN ALL / HUY ALL: xác nhận / hủy tất cả yêu cầu đang chờ của bạn trong chat này.\nHiệu lực: 15 phút.")
+                         "XACNHAN ALL / HUY ALL: xác nhận / hủy tất cả yêu cầu chưa xác nhận của bạn trong chat này.\nHUY CHO: hủy yêu cầu đã xác nhận nhưng Mac chưa nhận.\nHiệu lực xác nhận: 15 phút.")
                 reply(event.reply_token,preview)
             else:
                 command,jid=text.split(maxsplit=1)
-                if jid.strip().upper() == 'ALL' and command.upper() in {'XACNHAN','HUY'}:
+                if command.upper() == 'HUY' and jid.strip().upper() in {'CHO','CHỜ'}:
+                    reply(event.reply_token,queue.cancel_waiting(owner,chat))
+                elif jid.strip().upper() == 'ALL' and command.upper() in {'XACNHAN','HUY'}:
                     reply(event.reply_token,queue.confirm_all(owner,chat,command.upper()=='HUY'))
                 else:
                     reply(event.reply_token,queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN'))

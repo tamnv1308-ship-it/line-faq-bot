@@ -42,6 +42,35 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(states[ready['id']],'queued')
         self.assertEqual(states[waiting['id']],'cancelled')
 
+    def test_cancel_waiting_scope_and_claim(self):
+        a=self.q.draft('a','owner','group',self.p)
+        self.q.confirm(a['id'],'owner','group')
+        running=self.q.claim()
+        b=self.q.draft('b','owner','group',self.p)
+        self.q.confirm(b['id'],'owner','group')
+        other=self.q.draft('c','other','group',self.p)
+        self.q.confirm(other['id'],'other','group')
+        elsewhere=self.q.draft('d','owner','elsewhere',self.p)
+        self.q.confirm(elsewhere['id'],'owner','elsewhere')
+        draft=self.q.draft('e','owner','group',self.p)
+        self.assertIn('Đã hủy 1',self.q.cancel_waiting('owner','group'))
+        self.assertIn('Không có',self.q.cancel_waiting('owner','group'))
+        with self.q.db() as db:
+            states={r['id']:r['state'] for r in db.execute('SELECT * FROM jobs')}
+        self.assertEqual(states[a['id']],'running')
+        self.assertEqual(states[b['id']],'cancelled')
+        self.assertEqual(states[other['id']],'queued')
+        self.assertEqual(states[elsewhere['id']],'queued')
+        self.assertEqual(states[draft['id']],'draft')
+        self.assertIn('Không thể hủy',self.q.confirm(a['id'],'owner','group',True))
+    def test_cancel_one_and_block_notice(self):
+        a=self.draft();self.q.confirm(a['id'],'owner','group')
+        job=self.q.claim();self.q.update(job['id'],job['lease'],'unknown','check')
+        b=self.q.draft('b','owner','group',self.p)
+        self.assertIn('tạm dừng',self.q.confirm(b['id'],'owner','group'))
+        self.assertIn('Đã hủy yêu cầu chờ',self.q.confirm(b['id'],'owner','group',True))
+        self.assertIsNone(self.q.claim())
+
     def test_parser(self):
         self.assertEqual(self.p['product'],'0131491005424')
         for bad in [FORM.replace('Số lượng: 1','Số lượng: 0'),FORM+'\nKho xuất: 1',FORM.replace('Kho nhận: 10341','Kho nhận: 645')]:
