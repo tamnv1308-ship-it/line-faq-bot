@@ -9,31 +9,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-FIELDS = {'kho xuất': 'source', 'kho nhận': 'destination', 'kho nhập': 'destination',
-          'mã sản phẩm': 'product', 'số lượng': 'quantity', 'note': 'note', 'ghi chú': 'note'}
-
-def parse_form(text):
-    values = {}
-    for line in text.strip().splitlines():
-        if not line.strip():
-            continue
-        label, sep, value = line.partition(':')
-        key = FIELDS.get(label.strip().lower())
-        if not sep or not key or key in values:
-            raise ValueError('Mỗi dòng cần đúng tên trường và dấu :, không lặp trường.')
-        values[key] = value.strip()
-    for key, label in [('source','Kho xuất'),('destination','Kho nhận'),('product','Mã sản phẩm'),('quantity','Số lượng')]:
-        if not re.fullmatch(r'[0-9]{1,30}', values.get(key, '')):
-            raise ValueError(f'{label} phải là mã/số chỉ gồm chữ số.')
-    if values['source'] == values['destination']:
-        raise ValueError('Kho xuất và kho nhận phải khác nhau.')
-    values['quantity'] = int(values['quantity'])
-    if not 1 <= values['quantity'] <= 100000:
-        raise ValueError('Số lượng phải là số nguyên từ 1 đến 100000.')
-    values.setdefault('note', '')
-    if len(values['note']) > 500:
-        raise ValueError('Note tối đa 500 ký tự.')
-    return values
+from transfer_parser import parse_form, is_transfer_message
 
 class Queue:
     def __init__(self, path):
@@ -254,7 +230,7 @@ def install(app, reply, push, default_users=()):
 
     def handle(event):
         text=event.message.text.strip()
-        is_form=any(line.partition(':')[0].strip().lower() in FIELDS for line in text.splitlines())
+        is_form=is_transfer_message(text)
         is_command=text.upper().startswith(('XACNHAN ','HUY ','SUA '))
         if not (is_form or is_command):
             return False
