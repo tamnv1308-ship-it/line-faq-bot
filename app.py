@@ -372,7 +372,7 @@ def log_message_source(event):
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     log_message_source(event)
-    if handle_co(event):
+    if not event.message.text.strip().startswith(config.BOT_PREFIX) and handle_co(event):
         return
     user_text = event.message.text.strip()
     user_id = getattr(event.source, "user_id", None)
@@ -388,7 +388,7 @@ def handle_message(event):
     command_lower = command.lower()
     command_name = command_lower.split(maxsplit=1)[0] if command_lower else ""
 
-    admin_commands = {"reload", "test", "testreport", "sendall"}
+    admin_commands = {"reload", "test", "testreport", "sendall", "say", "list"}
 
     if (
         command_name in admin_commands
@@ -402,6 +402,52 @@ def handle_message(event):
             f"🔎 {config.BOT_PREFIX}<keyword>: tra cứu\n"
             f"📊 {config.BOT_PREFIX}testreport: gửi thử report"
         )
+
+    # LỆNH NỘI BỘ: GỬI NỘI DUNG TỰ VIẾT SANG GROUP KHÁC
+    elif command_name == "say":
+        payload = command[3:].strip()
+        group_key, separator, message = payload.partition("|")
+
+        group_key = group_key.strip().lower()
+        message = message.strip()
+
+        if not separator or not group_key or not message:
+            text = (
+                "⚠️ Cú pháp chưa đúng.\n\n"
+                f"{config.BOT_PREFIX}say <mã group> | <nội dung>"
+            )
+        else:
+            group_id = config.GROUPS.get(group_key)
+
+            if not group_id:
+                text = f"⚠️ Không tìm thấy mã group: {group_key}"
+
+            else:
+                success, error = push_to_group(group_id, message)
+
+                if success:
+                    text = (
+                        f"✅ Đã gửi nội dung đến group "
+                        f"'{group_key}'."
+                    )
+                else:
+                    text = f"⚠️ Gửi tin không thành công.\n{error}"
+
+    # LỆNH NỘI BỘ: LIST
+    elif command_lower == "list":
+        try:
+            data = sheets.load_sheet()
+
+            if not data:
+                text = "📭 Hiện tại chưa có keyword nào."
+            else:
+                text = "📚 Danh sách keyword\n\n"
+                text += "\n".join(
+                    f"• {key}" for key in sorted(data.keys())
+                )
+
+        except Exception as e:
+            text = f"⚠️ Không đọc được dữ liệu.\n{e}"
 
     elif command_lower == "reload":
         sheets.reload()
