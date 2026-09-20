@@ -318,8 +318,60 @@ def callback():
     return "OK"
 
 
+_source_name_cache = {}
+
+
+def source_name(kind, chat_id, user_id=None):
+    key = (kind, chat_id, user_id)
+    cached = _source_name_cache.get(key)
+    if cached and cached[0] > time.monotonic():
+        return cached[1]
+    name = "Không lấy được tên"
+    ttl = 60
+    try:
+        with ApiClient(configuration) as api_client:
+            bot = MessagingApi(api_client)
+            if kind == "group":
+                result = bot.get_group_summary(chat_id, _request_timeout=2)
+                name = result.group_name
+            elif kind == "group_user":
+                result = bot.get_group_member_profile(chat_id, user_id, _request_timeout=2)
+                name = result.display_name
+            elif kind == "room_user":
+                result = bot.get_room_member_profile(chat_id, user_id, _request_timeout=2)
+                name = result.display_name
+            else:
+                result = bot.get_profile(user_id, _request_timeout=2)
+                name = result.display_name
+        ttl = 3600
+    except Exception:
+        pass  # IDs remain available even when LINE cannot return a name.
+    name = " ".join(str(name).split())
+    if len(_source_name_cache) >= 512:
+        _source_name_cache.pop(next(iter(_source_name_cache)))
+    _source_name_cache[key] = (time.monotonic() + ttl, name)
+    return name
+
+
+def log_message_source(event):
+    source = event.source
+    group_id = getattr(source, "group_id", None)
+    room_id = getattr(source, "room_id", None)
+    user_id = getattr(source, "user_id", None)
+    group_name = source_name("group", group_id) if group_id else (
+        "Chat phòng" if room_id else "Chat riêng"
+    )
+    kind = "group_user" if group_id else "room_user" if room_id else "user"
+    user_name = source_name(kind, group_id or room_id, user_id) if user_id else "Không có User ID"
+    app.logger.warning(
+        "GROUP: %s | GROUP ID: %s | ROOM ID: %s | USER: %s | USER ID: %s",
+        group_name, group_id or "-", room_id or "-", user_name, user_id or "-",
+    )
+
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    log_message_source(event)
     if handle_co(event):
         return
     user_text = event.message.text.strip()
