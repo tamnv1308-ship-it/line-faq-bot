@@ -12,6 +12,17 @@ Khách đang đợi ạ - 16688
 Nhờ a/c tạo lệnh giúp e ạ @Người C 25251 @Người D 31718 @Người E 282210'''
 
 class ParserTests(unittest.TestCase):
+    def test_status_choices(self):
+        base='Kho xuất: 1\nKho nhận: 2\nMSP: 0003\nSL: 1'
+        self.assertEqual(parse_form(base)['status'],'Mới')
+        for status in ['Mới','Đã sử dụng','Mới giảm giá']:
+            parsed=parse_form(base+'\nTrạng thái: '+status)
+            self.assertEqual(parsed['status'],status)
+            self.assertEqual(parsed['note'],'')
+        with self.assertRaises(ValueError):
+            parse_form(base+'\nTrạng thái: hỏng')
+        with self.assertRaises(ValueError):
+            parse_form(base+'\nTrạng thái: Mới\nTrạng thái: Đã sử dụng')
     def test_user_sample_missing_quantity(self):
         self.assertTrue(is_transfer_message(SAMPLE))
         with self.assertRaisesRegex(ValueError,'Thiếu Số lượng'):

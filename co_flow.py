@@ -253,6 +253,7 @@ def install(app, reply, push, default_users=()):
                 p=json.loads(job['payload']); jid=job['id']
                 preview=(f"Xác nhận tạo CO — {jid}\nKho xuất: {p['source']}\nKho nhận: {p['destination']}\n"
                          f"Mã sản phẩm: {p['product']}\nSố lượng: {p['quantity']}\nNote: {p['note']}\n"
+                         f"Trạng thái: {p.get('status','Mới')}\n"
                          f"Thương hiệu: TGDD, DMX, TopZone\n\nGửi XACNHAN {jid} để tạo.\n"
                          f"Gửi SUA {jid} để hủy bản này và gửi form sửa; HUY {jid} để hủy.\n"
                          "XACNHAN ALL / HUY ALL: xác nhận / hủy tất cả yêu cầu chưa xác nhận của bạn trong chat này.\nHUY CHO: hủy yêu cầu đã xác nhận nhưng Mac chưa nhận.\nHiệu lực xác nhận: 15 phút.")

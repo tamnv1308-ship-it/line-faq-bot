@@ -8,6 +8,7 @@ ALIASES = {
     'product': ['ma san pham', 'ma sp', 'msp', 'sku'],
     'quantity': ['so luong', 'sl'],
     'note': ['ghi chu', 'note'],
+    'status': ['trang thai san pham', 'trang thai'],
 }
 LABELS = {'source': 'Kho xuất', 'destination': 'Kho nhận',
           'product': 'Mã sản phẩm', 'quantity': 'Số lượng'}
@@ -56,6 +57,14 @@ def parse_form(text):
             if value:
                 notes.append(value)
             continue
+        if key=='status':
+            if key in values:
+                raise ValueError('Trạng thái xuất hiện nhiều lần.')
+            statuses={'moi':'Mới','da su dung':'Đã sử dụng','moi giam gia':'Mới giảm giá'}
+            if fold(value) not in statuses:
+                raise ValueError('Trạng thái chỉ nhận Mới, Đã sử dụng hoặc Mới giảm giá.')
+            values[key]=statuses[fold(value)]
+            continue
         if key in values:
             raise ValueError(f'{LABELS[key]} xuất hiện nhiều lần. Chỉ gửi một yêu cầu trong mỗi tin nhắn.')
         if key=='quantity':
@@ -75,6 +84,7 @@ def parse_form(text):
     if not 1<=values['quantity']<=100000:
         raise ValueError('Số lượng phải là số nguyên từ 1 đến 100000.')
     values['note']='\n'.join(notes)
+    values.setdefault('status','Mới')
     if len(values['note'])>500:
         raise ValueError('Ghi chú vượt 500 ký tự. Rút gọn nội dung phụ và gửi lại; bot không tự cắt bỏ.')
     return values
