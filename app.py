@@ -99,8 +99,10 @@ def reply_text(reply_token, text):
                     messages=[TextMessage(text=text)],
                 )
             )
-    except Exception as error:
-        app.logger.error("Lỗi reply LINE: %s", error)
+        return True
+    except Exception:
+        app.logger.error("Không gửi được reply LINE.")
+        return False
 
 
 def format_number(value):
@@ -295,7 +297,7 @@ def push_co_result(chat, text, retry_key):
         return False
 
 handle_co, notify_co = co_flow.install(app, reply_text, push_co_result, config.ADMIN_USER_IDS)
-scheduler.add_job(notify_co, 'interval', seconds=20, id='co_result_notifications', max_instances=1)
+scheduler.add_job(notify_co, 'interval', seconds=2, id='co_result_notifications', max_instances=1)
 scheduler.start()
 
 

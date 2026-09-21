@@ -32,6 +32,8 @@ class Queue:
                 chat TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
                 created REAL NOT NULL, updated REAL NOT NULL, lease TEXT,
                 result TEXT, notified INTEGER NOT NULL DEFAULT 0);
+              CREATE TABLE IF NOT EXISTS preview_replies (
+                job_id TEXT PRIMARY KEY, token TEXT NOT NULL, received REAL NOT NULL);
             ''')
 
     @contextmanager
@@ -58,7 +60,7 @@ class Queue:
         finally:
             db.close()
 
-    def draft(self, event, owner, chat, payload, check_product=False):
+    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None):
         now = time.time()
         with self.db() as db:
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
@@ -68,7 +70,22 @@ class Queue:
             jid = secrets.token_hex(5)
             db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated) VALUES(?,?,?,?,?,?,?,?)',
                        (jid,event,owner,chat,json.dumps(payload,ensure_ascii=False),'preview_queued' if check_product else 'draft',now,now))
+            if check_product and reply_token:
+                db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,now))
             return dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+
+    def take_preview_reply(self, jid):
+        # Consume once, across scheduler runs/processes; never expose tokens to Mac.
+        with self.db() as db:
+            row=db.execute('SELECT token,received FROM preview_replies WHERE job_id=?',(jid,)).fetchone()
+            db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+            return dict(row) if row else None
+
+    def overdue_preview_replies(self):
+        with self.db() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT j.id,j.state FROM jobs j JOIN preview_replies p ON p.job_id=j.id WHERE p.received<?",
+                (time.time()-45,))]
 
     def confirm(self, jid, owner, chat, cancel=False):
         with self.db() as db:
@@ -254,11 +271,21 @@ def install(app, reply, push, default_users=()):
             import uuid
             retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-result:'+job['id']+(':preview' if job['state']=='draft' else '')))
             try:
-                if push(job['chat'],text,retry_key):
+                pending=queue.take_preview_reply(job['id'])
+                replied=False
+                if pending and time.time()-pending['received']<55:
+                    replied=reply(pending['token'],text) is True
+                if replied or push(job['chat'],text,retry_key):
                     queue.mark_notified(job['id'],job['state'])
                     next_notice.pop(key,None)
             except Exception:
                 app.logger.warning('CO notification pending; will retry.')
+
+        # Do not silently hold an expiring LINE reply while MWG/Mac is slow.
+        for waiting in queue.overdue_preview_replies():
+            pending=queue.take_preview_reply(waiting['id'])
+            if pending and time.time()-pending['received']<55:
+                reply(pending['token'],f"MWG chưa trả kết quả kiểm tra cho yêu cầu {waiting['id']}. Chưa tạo CO. Bot sẽ tự gửi bản xác nhận khi kiểm tra xong.")
 
     def handle(event):
         text=event.message.text.strip()
@@ -278,9 +305,9 @@ def install(app, reply, push, default_users=()):
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id
-                job=queue.draft(event_id,owner,chat,payload,check_product=True)
+                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token)
                 if job['state'] in {'preview_queued','preview_running'}:
-                    reply(event.reply_token,f"Đã nhận yêu cầu {job['id']}. Mac sẽ kiểm tra tên sản phẩm trên MWG rồi gửi bản xác nhận. Chưa tạo CO. Gửi XEM {job['id']} để lấy kết quả kiểm tra nếu chưa nhận tin tự động. Gửi HUY {job['id']} để hủy khi chưa được Mac nhận.")
+                    # Return webhook immediately; deliver the actual MWG preview as its reply.
                     return True
                 if job['state']!='draft':
                     reply(event.reply_token,'Yêu cầu này đã được ghi nhận. Không tạo thêm bản trùng.')
