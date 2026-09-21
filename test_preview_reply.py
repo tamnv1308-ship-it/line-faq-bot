@@ -45,6 +45,17 @@ class ReplyTests(unittest.TestCase):
         self.notify();self.assertEqual(len(self.replies),1);self.assertIn('Chưa tạo CO',self.replies[0][1])
         self.q.update(work['id'],work['lease'],'preview_ready','MWG Product')
         self.notify();self.assertEqual(len(self.pushes),1)
+    def test_old_push_backlog_does_not_block_preview_reply(self):
+        for i in range(3):
+            j=self.q.draft('old'+str(i),'owner','chat',dict(source='1',destination='2',product='003',quantity=1,note=''))
+            self.q.confirm(j['id'],'owner','chat');w=self.q.claim()
+            self.q.update(j['id'],w['lease'],'failed','old error')
+        self.handle(self.event());w=self.q.claim(True)
+        self.q.update(w['id'],w['lease'],'preview_ready','Current product')
+        self.notify()
+        self.assertEqual(len(self.replies),1);self.assertIn('Current product',self.replies[0][1])
+        self.assertEqual(len(self.pushes),1)
+
     def test_failed_reply_falls_back_to_push(self):
         self.handle(self.event());work=self.q.claim(True)
         self.q.update(work['id'],work['lease'],'preview_ready','MWG Product')

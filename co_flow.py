@@ -259,33 +259,43 @@ def install(app, reply, push, default_users=()):
     def notify():
         if not queue:
             return
+        fallback=[]
+        labels={'succeeded':'Tạo CO thành công', 'failed':'Không tạo được CO. Sửa thông tin và gửi lại form',
+                'unknown':'Chưa xác định được kết quả. Cần kiểm tra MWG trước khi tạo lại'}
+        # Deliver fresh replies before retrying old pushes (which may be quota-blocked).
         for job in queue.notifications():
-            key=(job['id'],job['state'])
-            if time.monotonic()<next_notice.get(key,0):
-                continue
-            next_notice[key]=time.monotonic()+60
-            labels={'succeeded':'Tạo CO thành công', 'failed':'Không tạo được CO. Sửa thông tin và gửi lại form',
-                    'unknown':'Chưa xác định được kết quả. Cần kiểm tra MWG trước khi tạo lại'}
             text=(preview_text(job) if job['state']=='draft' else f"{labels[job['state']]}\nYêu cầu: {job['id']}\n{job['result']}")
-            # Stable key permits LINE retry without duplicate pushes.
-            import uuid
-            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-result:'+job['id']+(':preview' if job['state']=='draft' else '')))
-            try:
-                pending=queue.take_preview_reply(job['id'])
-                replied=False
-                if pending and time.time()-pending['received']<55:
+            pending=queue.take_preview_reply(job['id'])
+            replied=False
+            if pending and time.time()-pending['received']<55:
+                try:
                     replied=reply(pending['token'],text) is True
-                if replied or push(job['chat'],text,retry_key):
-                    queue.mark_notified(job['id'],job['state'])
-                    next_notice.pop(key,None)
-            except Exception:
-                app.logger.warning('CO notification pending; will retry.')
-
+                except Exception:
+                    app.logger.warning('CO preview reply failed.')
+            if replied:
+                queue.mark_notified(job['id'],job['state'])
+            else:
+                fallback.append((job,text))
         # Do not silently hold an expiring LINE reply while MWG/Mac is slow.
         for waiting in queue.overdue_preview_replies():
             pending=queue.take_preview_reply(waiting['id'])
             if pending and time.time()-pending['received']<55:
                 reply(pending['token'],f"MWG chưa trả kết quả kiểm tra cho yêu cầu {waiting['id']}. Chưa tạo CO. Bot sẽ tự gửi bản xác nhận khi kiểm tra xong.")
+        # At most one push per tick so old failed deliveries cannot block new replies.
+        for job,text in fallback:
+            key=(job['id'],job['state'])
+            if time.monotonic()<next_notice.get(key,0):
+                continue
+            next_notice[key]=time.monotonic()+60
+            import uuid
+            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-result:'+job['id']+(':preview' if job['state']=='draft' else '')))
+            try:
+                if push(job['chat'],text,retry_key):
+                    queue.mark_notified(job['id'],job['state'])
+                    next_notice.pop(key,None)
+            except Exception:
+                app.logger.warning('CO notification pending; will retry.')
+            break
 
     def handle(event):
         text=event.message.text.strip()
