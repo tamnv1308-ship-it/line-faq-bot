@@ -304,6 +304,11 @@ def home():
     return "LINE FAQ BOT is running."
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}, 200
+
+
 @app.route("/report-images/<filename>")
 def report_image(filename):
     return send_from_directory(REPORT_DIRECTORY, filename)
