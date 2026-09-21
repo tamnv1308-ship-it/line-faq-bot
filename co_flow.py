@@ -87,7 +87,7 @@ class Queue:
                 "SELECT j.id,j.state FROM jobs j JOIN preview_replies p ON p.job_id=j.id WHERE p.received<?",
                 (time.time()-45,))]
 
-    def confirm(self, jid, owner, chat, cancel=False):
+    def confirm(self, jid, owner, chat, cancel=False, reply_token=None):
         with self.db() as db:
             job = db.execute('SELECT * FROM jobs WHERE id=? AND owner=? AND chat=?',(jid,owner,chat)).fetchone()
             if not job:
@@ -106,6 +106,10 @@ class Queue:
                 return 'Xác nhận đã hết hạn. Vui lòng gửi lại form.'
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
+            if not cancel and reply_token:
+                db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+                db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,time.time()))
+                return None
             return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.' + self.blocked_notice(db)
 
     def confirm_all(self, owner, chat, cancel=False):
@@ -144,7 +148,7 @@ class Queue:
             message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
             return message + self.blocked_notice(db)
 
-    def claim(self, preview_protocol=False):
+    def claim(self, preview_protocol=False, prepared_id=None):
         with self.db() as db:
             # Never automatically replay an interrupted browser operation.
             cutoff = time.time() - 900
@@ -155,7 +159,17 @@ class Queue:
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('running','submitting','unknown','preview_running')").fetchone():
                 return None
             eligible="('queued','preview_queued','verified_queued')" if preview_protocol else "('queued')"
-            job = db.execute("SELECT * FROM jobs WHERE state IN "+eligible+" ORDER BY created LIMIT 1").fetchone()
+            if prepared_id:
+                prepared=db.execute('SELECT * FROM jobs WHERE id=?',(prepared_id,)).fetchone()
+                if prepared and prepared['state']=='draft' and prepared['created']>=cutoff:
+                    return None  # Keep the imported MWG row until its owner confirms/cancels.
+                if prepared and prepared['state']=='draft':
+                    db.execute("UPDATE jobs SET state='expired',updated=? WHERE id=?",(time.time(),prepared_id))
+                if not prepared or prepared['state'] not in {'verified_queued','queued'}:
+                    return {'release_preview':True}
+                job=prepared
+            else:
+                job = db.execute("SELECT * FROM jobs WHERE state IN "+eligible+" ORDER BY created LIMIT 1").fetchone()
             if not job:
                 return None
             lease = secrets.token_urlsafe(24)
@@ -229,7 +243,11 @@ def install(app, reply, push, default_users=()):
     @app.post('/co/worker/claim')
     def claim():
         authenticated()
-        return jsonify(queue.claim((request.get_json(silent=True) or {}).get('preview_protocol')==1))
+        body=request.get_json(silent=True) or {}
+        prepared=body.get('prepared_id')
+        if prepared is not None and (not isinstance(prepared,str) or not re.fullmatch(r'[0-9a-f]{10}',prepared)):
+            abort(400)
+        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared))
 
     @app.get('/co/worker/status')
     def worker_status():
@@ -280,7 +298,9 @@ def install(app, reply, push, default_users=()):
         for waiting in queue.overdue_preview_replies():
             pending=queue.take_preview_reply(waiting['id'])
             if pending and time.time()-pending['received']<55:
-                reply(pending['token'],f"MWG chưa trả kết quả kiểm tra cho yêu cầu {waiting['id']}. Chưa tạo CO. Bot sẽ tự gửi bản xác nhận khi kiểm tra xong.")
+                creating=waiting['state'] in {'running','submitting','unknown'}
+                detail=('Chưa xác định được kết quả tạo CO; không gửi tạo lại trước khi kiểm tra MWG.' if creating else 'Chưa tạo CO.')
+                reply(pending['token'],f"MWG chưa trả kết quả xử lý yêu cầu {waiting['id']}. {detail} Bot sẽ tự gửi kết quả khi có phản hồi.")
         # At most one push per tick so old failed deliveries cannot block new replies.
         for job,text in fallback:
             key=(job['id'],job['state'])
@@ -342,7 +362,9 @@ def install(app, reply, push, default_users=()):
                 elif jid.strip().upper() == 'ALL' and command.upper() in {'XACNHAN','HUY'}:
                     reply(event.reply_token,queue.confirm_all(owner,chat,command.upper()=='HUY'))
                 else:
-                    reply(event.reply_token,queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN'))
+                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None)
+                    if message is not None:
+                        reply(event.reply_token,message)
         except ValueError as error:
             reply(event.reply_token,f'Form chưa hợp lệ: {error}\nVui lòng sửa và gửi lại.')
         return True

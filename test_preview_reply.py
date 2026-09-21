@@ -56,6 +56,15 @@ class ReplyTests(unittest.TestCase):
         self.assertEqual(len(self.replies),1);self.assertIn('Current product',self.replies[0][1])
         self.assertEqual(len(self.pushes),1)
 
+    def test_confirmation_failure_is_replied_without_ack_message(self):
+        self.handle(self.event());w=self.q.claim(True)
+        self.q.update(w['id'],w['lease'],'preview_ready','MWG Product');self.notify()
+        event=self.event();event.message.text='XACNHAN '+w['id'];event.reply_token='confirm-token'
+        self.handle(event);self.assertEqual(len(self.replies),1)
+        create=self.q.claim(True,w['id']);self.q.update(create['id'],create['lease'],'failed','Không đủ tồn kho')
+        self.notify();self.assertEqual(self.replies[-1][0],'confirm-token')
+        self.assertIn('Không đủ tồn kho',self.replies[-1][1]);self.assertEqual(self.pushes,[])
+
     def test_failed_reply_falls_back_to_push(self):
         self.handle(self.event());work=self.q.claim(True)
         self.q.update(work['id'],work['lease'],'preview_ready','MWG Product')
