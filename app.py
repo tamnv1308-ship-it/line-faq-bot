@@ -62,7 +62,11 @@ def push_to_group(group_id, text):
 
     except Exception as error:
         app.logger.error("Lỗi gửi LINE: %s", error)
-        return False, str(error)
+        if 'monthly limit' in str(error).lower():
+            return False, 'LINE đã hết hạn mức gửi tin tháng. Kiểm tra gói tin nhắn trong LINE Official Account; lệnh chưa gửi được.'
+        if getattr(error,'status',None)==429:
+            return False, 'LINE đang giới hạn gửi tin (429). Chờ rồi thử lại; chưa gửi thành công.'
+        return False, 'Không gửi được tin tới LINE. Kiểm tra bot còn trong nhóm và quyền gửi tin; xem log để biết lỗi.'
 
 
 def push_image_to_group(group_id, image_url):
@@ -394,6 +398,7 @@ def handle_message(event):
         command_name in admin_commands
         and user_id not in config.ADMIN_USER_IDS
     ):
+        reply_text(event.reply_token,'Lệnh này chỉ dành cho tài khoản ADM đã được cấp quyền.')
         return
 
     if command_lower in {"", "help"}:
