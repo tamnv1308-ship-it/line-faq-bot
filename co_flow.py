@@ -302,6 +302,7 @@ def install(app, reply, push, default_users=()):
                 detail=('Chưa xác định được kết quả tạo CO; không gửi tạo lại trước khi kiểm tra MWG.' if creating else 'Chưa tạo CO.')
                 reply(pending['token'],f"MWG chưa trả kết quả xử lý yêu cầu {waiting['id']}. {detail} Bot sẽ tự gửi kết quả khi có phản hồi.")
         # At most one push per tick so old failed deliveries cannot block new replies.
+        fallback.sort(key=lambda item:(item[0]['state']!='draft',-item[0]['updated']))
         for job,text in fallback:
             key=(job['id'],job['state'])
             if time.monotonic()<next_notice.get(key,0):
@@ -337,7 +338,11 @@ def install(app, reply, push, default_users=()):
                     event_id='message:'+event.message.id
                 job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token)
                 if job['state'] in {'preview_queued','preview_running'}:
-                    # Return webhook immediately; deliver the actual MWG preview as its reply.
+                    if os.getenv('CO_ACK_RECEIPT','1')=='1':
+                        # Consume the form token once for receipt; MWG preview follows by push.
+                        receipt=queue.take_preview_reply(job['id'])
+                        if receipt:
+                            reply(receipt['token'],f"Đã nhận yêu cầu {job['id']}, đang chờ lấy dữ liệu từ MWG. Vui lòng chờ thông tin xác nhận. Chưa tạo CO.")
                     return True
                 if job['state']!='draft':
                     reply(event.reply_token,'Yêu cầu này đã được ghi nhận. Không tạo thêm bản trùng.')

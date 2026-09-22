@@ -12,7 +12,7 @@ class ReplyTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.path=str(Path(self.tmp.name)/'q.db')
         self.replies=[];self.pushes=[]
-        self.env=patch.dict(os.environ,{'CO_ENABLED':'1','CO_DB_PATH':self.path,'CO_DATABASE_URL':'','CO_WORKER_TOKEN':'x'*32,'CO_ALLOWED_USER_IDS':'owner'})
+        self.env=patch.dict(os.environ,{'CO_ENABLED':'1','CO_ACK_RECEIPT':'0','CO_DB_PATH':self.path,'CO_DATABASE_URL':'','CO_WORKER_TOKEN':'x'*32,'CO_ALLOWED_USER_IDS':'owner'})
         self.env.start();self.addCleanup(self.env.stop)
         app=types.SimpleNamespace(post=lambda route:lambda f:f,get=lambda route:lambda f:f,logger=types.SimpleNamespace(warning=lambda *args:None))
         flask=types.SimpleNamespace(request=None,jsonify=None,abort=None)
@@ -25,6 +25,25 @@ class ReplyTests(unittest.TestCase):
         self.pushes.append(args);return True
     def event(self):
         return types.SimpleNamespace(reply_token='test-token',webhook_event_id='evt',source=types.SimpleNamespace(user_id='owner'),message=types.SimpleNamespace(id='msg',text='Kho xuất: 123\nKho nhận: 456\nMã sản phẩm: 00123\nSố lượng: 1\nNote:'))
+    def test_immediate_receipt_then_preview_push_without_creation(self):
+        with patch.dict(os.environ,{'CO_ACK_RECEIPT':'1'}):
+            self.handle(self.event());self.handle(self.event())
+        self.assertEqual(len(self.replies),1)
+        self.assertIn('Đã nhận yêu cầu',self.replies[0][1])
+        self.assertIn('Chưa tạo CO',self.replies[0][1])
+        w=self.q.claim(True);self.assertEqual(w['mode'],'preview')
+        self.q.update(w['id'],w['lease'],'preview_ready','MWG Product')
+        self.notify();self.notify()
+        self.assertEqual(len(self.replies),1);self.assertEqual(len(self.pushes),1)
+        self.assertIn('MWG Product',self.pushes[0][1]);self.assertIn('XACNHAN',self.pushes[0][1])
+        self.assertIsNone(self.q.claim(True,w['id']))
+
+    def test_import_error_after_receipt_is_pushed(self):
+        with patch.dict(os.environ,{'CO_ACK_RECEIPT':'1'}):self.handle(self.event())
+        w=self.q.claim(True);self.q.update(w['id'],w['lease'],'failed','MWG lỗi nhập file')
+        self.notify();self.assertIn('MWG lỗi nhập file',self.pushes[0][1])
+        self.assertEqual(len(self.replies),1)
+
     def test_only_actual_preview_replied_and_no_creation(self):
         event=self.event();self.assertTrue(self.handle(event));self.assertEqual(self.replies,[])
         self.handle(event) # webhook redelivery must not consume reply/create duplicate
