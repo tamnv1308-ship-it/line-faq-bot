@@ -338,7 +338,7 @@ def install(app, reply, push, default_users=()):
                     event_id='message:'+event.message.id
                 job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token)
                 if job['state'] in {'preview_queued','preview_running'}:
-                    if os.getenv('CO_ACK_RECEIPT','1')=='1':
+                    if os.getenv('CO_ACK_RECEIPT','0')=='1':
                         # Consume the form token once for receipt; MWG preview follows by push.
                         receipt=queue.take_preview_reply(job['id'])
                         if receipt:
