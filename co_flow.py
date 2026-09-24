@@ -9,15 +9,20 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from transfer_parser import parse_form, is_transfer_message
+from transfer_parser import parse_form, parse_request, is_transfer_message
+from co_results import items, preview_names, decode_results, result_text
 
 def preview_text(job):
     p=json.loads(job['payload']);jid=job['id']
-    return (f"Xác nhận tạo CO — {jid}\nKho xuất: {p['source']}\nKho nhận: {p['destination']}\n"
-            f"Mã sản phẩm: {p['product']}\nTên sản phẩm MWG: {p.get('product_name','Chưa kiểm tra')}\n"
-            f"Số lượng: {p['quantity']}\nNote: {p['note']}\nTrạng thái: {p.get('status','Mới')}\n"
-            f"Thương hiệu: TGDD, DMX, TopZone\n\nGửi XACNHAN {jid} để tạo; HUY {jid} để hủy.\n"
-            "XACNHAN ALL / HUY ALL: áp dụng các bản đang chờ xác nhận. HUY CHO: hủy yêu cầu Mac chưa nhận.\nHiệu lực: 15 phút.")
+    blocks=[f"Xác nhận tạo CO — {jid}"]
+    for n,item in enumerate(items(p),1):
+        blocks.append(f"{n}. Kho xuất: {item['source']} → Kho nhận: {item['destination']}\n"
+                      f"Tên sản phẩm MWG: {item.get('product_name','Chưa kiểm tra')}\n"
+                      f"Số lượng: {item['quantity']}{' (mặc định)' if item.get('quantity_defaulted') else ''}\n"
+                      f"Note: {item['note']}\nTrạng thái: {item.get('status','Mới')}")
+    blocks.append(f"Thương hiệu: TGDD, DMX, TopZone\nGửi XACNHAN {jid} để tạo; HUY {jid} để hủy.\n"
+                  "XACNHAN ALL / HUY ALL: áp dụng các bản đang chờ xác nhận. HUY CHO: hủy yêu cầu Mac chưa nhận.\nHiệu lực: 15 phút.")
+    return '\n\n'.join(blocks)
 
 class Queue:
     def __init__(self, path):
@@ -112,7 +117,7 @@ class Queue:
                 return None
             return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.' + self.blocked_notice(db)
 
-    def confirm_all(self, owner, chat, cancel=False):
+    def confirm_all(self, owner, chat, cancel=False, reply_token=None):
         now = time.time()
         with self.db() as db:
             db.execute("UPDATE jobs SET state='expired',updated=? WHERE owner=? AND chat=? AND state='draft' AND created<?",
@@ -125,6 +130,11 @@ class Queue:
             for job in jobs:
                 target='cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
                 db.execute("UPDATE jobs SET state=?,updated=? WHERE id=? AND state='draft'",(target,now,job['id']))
+            if not cancel and reply_token and len(jobs)==1:
+                jid=jobs[0]['id']
+                db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+                db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,now))
+                return None
             action = 'Đã hủy' if cancel else 'Đã xác nhận'
             message = f'{action} {len(jobs)} yêu cầu đang chờ của bạn trong cuộc chat này.'
             if not cancel:
@@ -148,7 +158,7 @@ class Queue:
             message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
             return message + self.blocked_notice(db)
 
-    def claim(self, preview_protocol=False, prepared_id=None):
+    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False):
         with self.db() as db:
             # Never automatically replay an interrupted browser operation.
             cutoff = time.time() - 900
@@ -172,6 +182,8 @@ class Queue:
                 job = db.execute("SELECT * FROM jobs WHERE state IN "+eligible+" ORDER BY created LIMIT 1").fetchone()
             if not job:
                 return None
+            if 'items' in json.loads(job['payload']) and not batch_protocol:
+                return None
             lease = secrets.token_urlsafe(24)
             preview=job['state']=='preview_queued'
             db.execute("UPDATE jobs SET state=?,lease=?,updated=? WHERE id=?",('preview_running' if preview else 'running',lease,time.time(),job['id']))
@@ -184,16 +196,31 @@ class Queue:
                 return False
             if job['state'] == state and (job['result'] or '') == result:
                 return True
-            if state=='preview_ready' and job['state']=='draft' and job['result']=='MWG_PREVIEW':
-                return json.loads(job['payload']).get('product_name')==result
-            if state=='preview_ready' and job['state']=='preview_running':
-                if not result.strip() or len(result)>300:
+            if state=='preview_ready' and job['state'] in {'draft','preview_running'}:
+                payload=json.loads(job['payload'])
+                try:
+                    names=preview_names(payload,result)
+                except (ValueError,TypeError):
                     return False
-                payload=json.loads(job['payload']);payload['product_name']=result.strip()
+                if job['state']=='draft':
+                    return job['result']=='MWG_PREVIEW' and [item.get('product_name') for item in items(payload)]==names
+                for item,name in zip(items(payload),names):
+                    item['product_name']=name
+                if 'items' in payload:
+                    payload['product_name']='MWG_BATCH_READY'
                 now=time.time()
                 db.execute("UPDATE jobs SET state='draft',payload=?,result='MWG_PREVIEW',created=?,updated=?,notified=0 WHERE id=?",
                            (json.dumps(payload,ensure_ascii=False),now,now,jid))
                 return True
+            if state in {'succeeded','failed','unknown'} and result.startswith('['):
+                try:
+                    rows=decode_results(json.loads(job['payload']),result)
+                    if state=='succeeded' and (not all(row['co'] or row['error'] for row in rows) or not any(row['co'] for row in rows)):
+                        return False
+                    if state=='failed' and any(row['co'] for row in rows):
+                        return False
+                except (ValueError,TypeError):
+                    return False
             allowed = {'preview_running':{'failed'},'running': {'submitting','failed','unknown'}, 'submitting': {'succeeded','failed','unknown'}}
             if state not in allowed.get(job['state'], set()):
                 return False
@@ -247,7 +274,7 @@ def install(app, reply, push, default_users=()):
         prepared=body.get('prepared_id')
         if prepared is not None and (not isinstance(prepared,str) or not re.fullmatch(r'[0-9a-f]{10}',prepared)):
             abort(400)
-        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared))
+        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1))
 
     @app.get('/co/worker/status')
     def worker_status():
@@ -264,9 +291,9 @@ def install(app, reply, push, default_users=()):
             abort(400)
         state = data.get('state')
         message = data.get('result','')
-        if state not in {'submitting','succeeded','failed','unknown','preview_ready'} or not isinstance(message,str) or len(message)>3000:
+        if state not in {'submitting','succeeded','failed','unknown','preview_ready'} or not isinstance(message,str) or len(message)>10000:
             abort(400)
-        if state == 'succeeded' and not re.fullmatch(r'[0-9A-Z]+CO[0-9]+', message):
+        if state == 'succeeded' and not message.startswith('[') and not re.fullmatch(r'[0-9A-Z]+CO[0-9]+', message):
             abort(400)
         if not queue.update(data.get('id'),data.get('lease'),state,message):
             abort(409)
@@ -282,7 +309,7 @@ def install(app, reply, push, default_users=()):
                 'unknown':'Chưa xác định được kết quả. Cần kiểm tra MWG trước khi tạo lại'}
         # Deliver fresh replies before retrying old pushes (which may be quota-blocked).
         for job in queue.notifications():
-            text=(preview_text(job) if job['state']=='draft' else f"{labels[job['state']]}\nYêu cầu: {job['id']}\n{job['result']}")
+            text=(preview_text(job) if job['state']=='draft' else result_text(job))
             pending=queue.take_preview_reply(job['id'])
             replied=False
             if pending and time.time()-pending['received']<55:
@@ -332,7 +359,7 @@ def install(app, reply, push, default_users=()):
             reply(event.reply_token,'Tài khoản chưa được cấp quyền tạo CO.'); return True
         try:
             if is_form:
-                payload=parse_form(text)
+                payload=parse_request(text)
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id
@@ -365,7 +392,9 @@ def install(app, reply, push, default_users=()):
                 elif command.upper() == 'HUY' and jid.strip().upper() in {'CHO','CHỜ'}:
                     reply(event.reply_token,queue.cancel_waiting(owner,chat))
                 elif jid.strip().upper() == 'ALL' and command.upper() in {'XACNHAN','HUY'}:
-                    reply(event.reply_token,queue.confirm_all(owner,chat,command.upper()=='HUY'))
+                    message=queue.confirm_all(owner,chat,command.upper()=='HUY',reply_token=event.reply_token)
+                    if message is not None:
+                        reply(event.reply_token,message)
                 else:
                     message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None)
                     if message is not None:

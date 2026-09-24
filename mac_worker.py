@@ -7,6 +7,7 @@ import re
 import time
 import urllib.request
 from pathlib import Path
+from co_results import items
 
 URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
@@ -63,17 +64,19 @@ def fill_template(source, target, data):
         raise RuntimeError('Cấu trúc mẫu Excel đã thay đổi.')
     if any(c.value is not None for row in ws.iter_rows(min_row=2) for c in row):
         raise RuntimeError('Mẫu có dữ liệu sẵn; dừng để tránh nhập nhầm.')
-    # Some MWG templates contain thousands of formatted empty rows.
-    # Each job has exactly one data row; do not upload that unused tail.
-    if ws.max_row>2:
-        ws.delete_rows(3,ws.max_row-2)
+    records=items(data)
+    last_row=len(records)+1
+    if ws.max_row>last_row:
+        ws.delete_rows(last_row+1,ws.max_row-last_row)
     for row_number in list(ws.row_dimensions):
-        if row_number>2:
+        if row_number>last_row:
             del ws.row_dimensions[row_number]
-    for col,key in enumerate(['source','destination','product','quantity','note'],1):
-        cell=ws.cell(2,col); cell.value=data[key]
-        if isinstance(data[key],str):
-            cell.data_type='s'
+    for row_number,record in enumerate(records,2):
+        for col,key in enumerate(['source','destination','product','quantity','note'],1):
+            cell=ws.cell(row_number,col); cell.value=record[key]
+            if isinstance(record[key],str):
+                cell.data_type='s'
+                cell.number_format='@'
     wb.save(target)
 
 def table_with(page, header):
@@ -86,6 +89,25 @@ def data_rows(table):
         if cells and any(value.strip() for value in cells):
             result.append((row,cells))
     return result
+
+def match_rows(rows, records):
+    if len(rows)!=len(records):
+        return None
+    matched=[]; used=set()
+    for data in records:
+        candidates=[]
+        for index,(_,cells) in enumerate(rows):
+            if index in used or len(cells)!=11:
+                continue
+            if (cells[3].strip()==data['product'] and cells[5].strip()==str(data['quantity'])
+                    and cells[7].strip()==data['note']
+                    and all(re.match(r'^'+re.escape(value)+r'(?:\s*-|\s*$)',actual.strip())
+                            for value,actual in [(data['source'],cells[1]),(data['destination'],cells[2])])):
+                candidates.append((index,cells))
+        if len(candidates)!=1:
+            return None
+        index,cells=candidates[0]; used.add(index); matched.append(cells)
+    return matched
 
 def cancel_import(page):
     cancel=page.get_by_text('Hủy',exact=True)
@@ -126,15 +148,42 @@ def select_product_status(page, status):
         raise RuntimeError('Trạng thái yêu cầu không hợp lệ; chưa nhập file.')
     control=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
     control.wait_for(state='visible',timeout=15000)
+    if control.input_value().strip()==labels[status]:
+        return
     control.press('Alt+ArrowDown')
     page.get_by_role('option',name=labels[status],exact=True).click()
     page.wait_for_timeout(700)
     if control.input_value().strip()!=labels[status]:
         raise RuntimeError('Không xác nhận được trạng thái '+status+'; chưa nhập file.')
 
+def prepare_import_controls(page, job):
+    # Run only before a new import, never while holding a row for confirmation.
+    control=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
+    for attempt in range(3):
+        control.wait_for(state='visible',timeout=15000)
+        for _ in range(6):
+            if control.input_value().strip():
+                break
+            page.wait_for_timeout(500)
+        if control.input_value().strip():
+            progress(job,'select_brands')
+            select_brands(page)
+            # Brand loading may clear the status widget again.
+            if control.input_value().strip():
+                progress(job,'select_product_status')
+                select_product_status(page,job['payload'].get('status','Mới'))
+                return
+        if attempt<2:
+            progress(job,'reload_blank_product_status')
+            page.reload(wait_until='domcontentloaded',timeout=30000)
+            page.get_by_role('button',name='Tạo CO',exact=True).wait_for(timeout=30000)
+    raise RuntimeError('Ô trạng thái sản phẩm vẫn trống sau 3 lần kiểm tra và tải lại MWG; chưa nhập file, chưa tạo CO. Vui lòng thử lại khi trang tải đầy đủ.')
+
 def process(page, job, prepared_id=None):
     submitting=False
     alerts=[]
+    records=items(job['payload'])
+    outcomes=[{'co':'','error':''} for _ in records]
     def on_dialog(dialog):
         alerts.append(dialog.message)
         if dialog.type=='alert':
@@ -157,10 +206,7 @@ def process(page, job, prepared_id=None):
             else:
                 page.goto(URL,wait_until='domcontentloaded',timeout=30000)
             page.get_by_role('button',name='Tạo CO',exact=True).wait_for(timeout=30000)
-            progress(job,'select_brands')
-            select_brands(page)
-            progress(job,'select_product_status')
-            select_product_status(page,job['payload'].get('status','Mới'))
+            prepare_import_controls(page,job)
             progress(job,'prepare_local_template')
             if not TEMPLATE.is_file():
                 raise RuntimeError('Thiếu mẫu Excel lưu trên Mac; cần cập nhật templates/StoreChangeOrderTGDD_template.xlsx. Chưa tạo CO.')
@@ -184,10 +230,10 @@ def process(page, job, prepared_id=None):
                 if len(cells)>=9 and cells[8].strip():
                     errors.append(cells[8].strip())
             progress(job,'accept_import')
-            page.get_by_text('Đồng ý',exact=True).click()
             if errors:
                 cancel_import(page)
                 report(job,'failed','; '.join(dict.fromkeys(errors))[:2500]); return
+            page.get_by_text('Đồng ý',exact=True).click()
             popup.wait_for(state='hidden',timeout=15000)
         table=table_with(page,'Mã yêu cầu chuyển kho')
         deadline=time.monotonic()+10
@@ -195,25 +241,22 @@ def process(page, job, prepared_id=None):
         while not rows and time.monotonic()<deadline:
             page.wait_for_timeout(250)
             rows=data_rows(table)
-        if len(rows)!=1:
-            raise RuntimeError('Sau khi nhập Excel có '+str(len(rows))+
-                               ' dòng dữ liệu, cần đúng 1 dòng; bot chưa bấm Tạo CO.')
-        _,cells=rows[0]; data=job['payload']
-        if len(cells)!=11 or cells[3].strip()!=data['product'] or cells[5].strip()!=str(data['quantity']) or cells[7].strip()!=data['note']:
-            raise RuntimeError('Dữ liệu trên trang khác nội dung đã xác nhận.')
-        for value,actual in [(data['source'],cells[1]),(data['destination'],cells[2])]:
-            if not re.match(r'^'+re.escape(value)+r'(?:\s*-|\s*$)',actual.strip()):
-                raise RuntimeError('Kho trên trang khác kho đã xác nhận.')
-        if cells[9].strip() or cells[10].strip():
-            raise RuntimeError('Trang đã có mã CO hoặc lỗi; dừng để kiểm tra.')
-        product_name=cells[4].strip()
+        matched=match_rows(rows,records)
+        if matched is None:
+            raise RuntimeError('Dữ liệu trên trang không khớp đủ '+str(len(records))+' dòng yêu cầu; chưa tạo CO.')
+        for cells in matched:
+            if cells[9].strip() or cells[10].strip():
+                raise RuntimeError('Trang đã có mã CO hoặc lỗi; dừng để kiểm tra.')
+        names=[cells[4].strip() for cells in matched]
+        if not all(names):
+            raise RuntimeError('MWG chưa trả đủ tên sản phẩm; chưa tạo CO.')
         if job.get('mode')=='preview':
-            if not product_name:
-                raise RuntimeError('MWG chưa trả tên sản phẩm; chưa tạo CO.')
-            report(job,'preview_ready',product_name)
+            report(job,'preview_ready',json.dumps(names,ensure_ascii=False) if 'items' in job['payload'] else names[0])
             return job['id']
-        if data.get('product_name') and product_name!=data['product_name']:
-            raise RuntimeError('Tên sản phẩm trên MWG khác bản đã xác nhận; chưa tạo CO. Gửi lại yêu cầu để kiểm tra.')
+        for data,name in zip(records,names):
+            if data.get('product_name') and name!=data['product_name']:
+                raise RuntimeError('Tên sản phẩm trên MWG khác bản đã xác nhận; chưa tạo CO.')
+        data=job['payload']
         if reuse:
             status_labels={'Mới':'1 - Mới','Đã sử dụng':'2 - Đã sử dụng','Mới giảm giá':'8 - Mới (Giảm giá)'}
             actual=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True).input_value().strip()
@@ -231,32 +274,20 @@ def process(page, job, prepared_id=None):
         page.get_by_role('button',name='Tạo CO',exact=True).click()
         deadline=time.monotonic()+60
         while time.monotonic()<deadline:
-            rejection=concurrent_rejection(alerts,data)
-            if rejection:
-                report(job,'failed',rejection); return
-            current=data_rows(table)
-            if len(current)!=1:
-                # MWG replaces the table while the create request is in flight.
-                # Keep observing; never click Create a second time.
-                page.wait_for_timeout(500)
-                continue
-            cells=current[0][1]
-            if len(cells)!=11:
-                page.wait_for_timeout(500)
-                continue
-            same_order=(cells[3].strip()==data['product'] and
-                        cells[5].strip()==str(data['quantity']) and
-                        cells[7].strip()==data['note'] and
-                        all(re.match(r'^'+re.escape(value)+r'(?:\s*-|\s*$)',actual.strip())
-                            for value,actual in [(data['source'],cells[1]),(data['destination'],cells[2])]))
-            if not same_order:
-                page.wait_for_timeout(500)
-                continue
-            if cells[9].strip() and not cells[10].strip():
-                report(job,'succeeded',cells[9].strip()); return
-            if cells[10].strip():
-                report(job,'failed',cells[10].strip()[:2500]); return
-            page.wait_for_timeout(500)
+            current=match_rows(data_rows(table),records)
+            if current is not None:
+                for index,cells in enumerate(current):
+                    co=cells[9].strip(); error=cells[10].strip()
+                    if co or error:
+                        outcomes[index]={'co':co,'error':error[:350]}
+                if all(row['co'] or row['error'] for row in outcomes):
+                    state='unknown' if any(row['co'] and row['error'] for row in outcomes) else 'succeeded' if any(row['co'] for row in outcomes) else 'failed'
+                    report(job,state,json.dumps(outcomes,ensure_ascii=False)); return
+            if len(records)==1:
+                rejection=concurrent_rejection(alerts,records[0])
+                if rejection:
+                    report(job,'failed',rejection); return
+            page.wait_for_timeout(300)
         raise RuntimeError('Chưa thấy mã CO hoặc lỗi sau khi tạo; cần kiểm tra thủ công.')
     except Exception as error:
         progress(job,'exception_'+type(error).__name__)
@@ -281,7 +312,13 @@ def process(page, job, prepared_id=None):
                 cancel_import(page)
             except Exception:
                 pass
-        report(job,'unknown' if submitting else 'failed',message)
+        if submitting:
+            for outcome in outcomes:
+                if not outcome['co'] and not outcome['error']:
+                    outcome['error']='Chưa rõ kết quả; cần đối soát MWG. '+message[:250]
+            report(job,'unknown',json.dumps(outcomes,ensure_ascii=False))
+        else:
+            report(job,'failed',message)
     finally:
         page.remove_listener('dialog',on_dialog)
 
@@ -349,7 +386,7 @@ def main():
             prepared_id=None
             while True:
                 context,page=ensure_browser(pw,context,page)
-                job=api('claim',{'preview_protocol':1,'prepared_id':prepared_id})
+                job=api('claim',{'preview_protocol':1,'prepared_id':prepared_id,'batch_protocol':1})
                 if job and job.get('release_preview'):
                     prepared_id=None
                     refresh_at=time.monotonic()+300
@@ -363,7 +400,7 @@ def main():
                     except Exception as error:
                         print('Không tải lại được trang MWG: '+type(error).__name__,flush=True)
                     refresh_at=time.monotonic()+300
-                time.sleep(5)
+                time.sleep(1 if prepared_id else 2)
         context.close()
 
 if __name__=='__main__':

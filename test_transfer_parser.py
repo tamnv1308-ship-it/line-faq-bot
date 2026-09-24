@@ -12,6 +12,17 @@ Khách đang đợi ạ - 16688
 Nhờ a/c tạo lệnh giúp e ạ @Người C 25251 @Người D 31718 @Người E 282210'''
 
 class ParserTests(unittest.TestCase):
+    def test_source_and_product_aliases(self):
+        for source in ['Kho chuyển','kho chuyen','Kho xuất']:
+            for product in ['MSP','SP','mã sản phẩm','ma san pham']:
+                p=parse_form(f'{source}: 2533\nKho nhận: 315\n{product}: 0131491005420\nSL: 1')
+                self.assertEqual((p['source'],p['product']),('2533','0131491005420'))
+    def test_sp_name_is_not_a_second_product_code(self):
+        p=parse_form('SP: Điện thoại iPhone 18 Pro Max\nMSP: 0131491005420\nKho chuyển: 2533\nKho nhận: 315\nSL: 1')
+        self.assertEqual(p['product'],'0131491005420')
+        with self.assertRaisesRegex(ValueError,'Thiếu Mã sản phẩm'):
+            parse_form('SP: iPhone 18\nKho chuyển: 2533\nKho nhận: 315\nSL: 1')
+
     def test_status_choices(self):
         base='Kho xuất: 1\nKho nhận: 2\nMSP: 0003\nSL: 1'
         self.assertEqual(parse_form(base)['status'],'Mới')
@@ -25,14 +36,26 @@ class ParserTests(unittest.TestCase):
             parse_form(base+'\nTrạng thái: Mới\nTrạng thái: Đã sử dụng')
     def test_user_sample_missing_quantity(self):
         self.assertTrue(is_transfer_message(SAMPLE))
-        with self.assertRaisesRegex(ValueError,'Thiếu Số lượng'):
-            parse_form(SAMPLE)
+        p=parse_form(SAMPLE)
+        self.assertEqual(p['quantity'],1)
+        self.assertTrue(p['quantity_defaulted'])
     def test_user_sample_complete_ignores_unlabelled_notes(self):
         p=parse_form(SAMPLE+'\nSL: 1 máy')
         self.assertEqual((p['source'],p['destination'],p['product'],p['quantity']),('2533','315','0131491005420',1))
-        self.assertEqual(p['note'],'')
+        self.assertEqual(p['note'],'QL cho hàng : Người A -')
         p=parse_form(SAMPLE+'\nSL: 1 máy\nNote: chuyển gấp\nNhờ @Người F hỗ trợ\nGhi chú: khách đợi')
-        self.assertEqual(p['note'],'chuyển gấp\nkhách đợi')
+        self.assertEqual(p['note'],'QL cho hàng : Người A -\nchuyển gấp\nkhách đợi')
+    def test_approval_notes_and_explicit_quantity(self):
+        base='Kho xuất: 1\nKho nhận: 2\nMSP: 0003'
+        p=parse_form(base+'\nQL cho hàng Hải 196767\nDM xác nhận: Hùng\nNhờ @A hỗ trợ\nSL: 3')
+        self.assertEqual(p['note'],'QL cho hàng Hải 196767\nDM xác nhận: Hùng')
+        self.assertEqual(p['quantity'],3)
+        self.assertFalse(p.get('quantity_defaulted',False))
+        self.assertEqual(parse_form(base)['note'],'')
+        for invalid in ['', '0', '-1', 'abc']:
+            with self.assertRaises(ValueError):
+                parse_form(base+'\nSL: '+invalid)
+
     def test_variants(self):
         for text in ['KHO XUẤT：2533; Kho nhập = 315 | MSP: 0131491005420; SL: 1',
                      '• kho xuat 2533\n- kho nhan 315\n* ma sp 0131491005420\nso luong 1 chiếc',

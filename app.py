@@ -1,3 +1,4 @@
+from co_results import message_chunks
 import os
 import random
 import secrets
@@ -55,7 +56,7 @@ def push_to_group(group_id, text):
             MessagingApi(api_client).push_message(
                 PushMessageRequest(
                     to=group_id,
-                    messages=[TextMessage(text=text)],
+                    messages=[TextMessage(text=part) for part in message_chunks(text)],
                 )
             )
         return True, None
@@ -96,7 +97,7 @@ def reply_text(reply_token, text):
             MessagingApi(api_client).reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
-                    messages=[TextMessage(text=text)],
+                    messages=[TextMessage(text=part) for part in message_chunks(text)],
                 )
             )
         return True
@@ -283,7 +284,7 @@ def push_co_result(chat, text, retry_key):
     import urllib.request
     import urllib.error
     import json
-    payload = json.dumps({'to': chat, 'messages': [{'type': 'text', 'text': text}]}).encode()
+    payload = json.dumps({'to': chat, 'messages': [{'type': 'text', 'text': part} for part in message_chunks(text)]}).encode()
     req = urllib.request.Request('https://api.line.me/v2/bot/message/push', data=payload,
         headers={'Authorization': 'Bearer ' + config.CHANNEL_ACCESS_TOKEN,
                  'Content-Type': 'application/json', 'X-Line-Retry-Key': retry_key})
