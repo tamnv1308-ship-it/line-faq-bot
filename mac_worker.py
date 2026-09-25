@@ -5,6 +5,8 @@ import json
 import os
 import re
 import time
+import threading
+import atexit
 import urllib.request
 from pathlib import Path
 from co_results import items
@@ -353,6 +355,25 @@ def ensure_browser(pw, context, page):
             raise
         return open_browser(pw)
 
+def start_heartbeat():
+    stop=threading.Event()
+    api('heartbeat',{'online':True})
+    def pulse():
+        while not stop.wait(10):
+            try:
+                api('heartbeat',{'online':True})
+            except Exception:
+                print('Mất kết nối heartbeat; server sẽ tự ngừng nhận CO khi quá 30 giây.',flush=True)
+    threading.Thread(target=pulse,daemon=True).start()
+    def shutdown():
+        stop.set()
+        try:
+            api('heartbeat',{'online':False})
+        except Exception:
+            pass
+    atexit.register(shutdown)
+    return stop
+
 def main():
     env_file=Path(__file__).resolve().parent/'.env'
     if env_file.exists():
@@ -382,6 +403,7 @@ def main():
                 record=json.loads(pending.read_text()); api('result',record); pending.unlink()
                 if record['state']=='submitting':
                     raise RuntimeError('Có tác vụ dở ở bước tạo. Kiểm tra MWG trước khi chạy lại.')
+            start_heartbeat()
             refresh_at=time.monotonic()+300
             prepared_id=None
             while True:

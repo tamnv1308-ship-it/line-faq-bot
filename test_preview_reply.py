@@ -19,6 +19,7 @@ class ReplyTests(unittest.TestCase):
         with patch.dict('sys.modules',{'flask':flask}):
             self.handle,self.notify=install(app,self.reply,self.push)
         self.q=Queue(self.path)
+        self.q.heartbeat()
     def reply(self,token,text):
         self.replies.append((token,text));return True
     def push(self,*args):

@@ -12,6 +12,15 @@ from pathlib import Path
 from transfer_parser import parse_form, parse_request, is_transfer_message
 from co_results import items, preview_names, decode_results, result_text
 
+class BotUnavailable(ValueError):
+    pass
+
+ADMIN_CO_COMMANDS={'BOT ON','BOT OFF','BOT STATUS','HUY CHO ALL','HUY CHỜ ALL','LISTADM'}
+
+def admin_command(text):
+    command=' '.join(text.strip().lstrip('!').upper().split())
+    return command if command in ADMIN_CO_COMMANDS else None
+
 def preview_text(job):
     p=json.loads(job['payload']);jid=job['id']
     blocks=[f"Xác nhận tạo CO — {jid}"]
@@ -39,6 +48,9 @@ class Queue:
                 result TEXT, notified INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS preview_replies (
                 job_id TEXT PRIMARY KEY, token TEXT NOT NULL, received REAL NOT NULL);
+              CREATE TABLE IF NOT EXISTS co_control (
+                id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL, heartbeat REAL NOT NULL);
+              INSERT INTO co_control(id,enabled,heartbeat) VALUES(1,1,0) ON CONFLICT(id) DO NOTHING;
             ''')
 
     @contextmanager
@@ -65,12 +77,53 @@ class Queue:
         finally:
             db.close()
 
-    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None):
+    def unavailable(self, db):
+        row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
+        if not row['enabled']:
+            return 'Bot CO đang tạm nghỉ theo lệnh ADM. Yêu cầu mới chưa được lưu; vui lòng gửi lại sau.'
+        if time.time()-row['heartbeat']>30:
+            return 'Bot trên Mac đang offline hoặc mất kết nối. Chưa nhận yêu cầu CO; vui lòng gửi lại khi Mac hoạt động.'
+        return ''
+
+    def heartbeat(self, online=True):
+        with self.db() as db:
+            db.execute('UPDATE co_control SET heartbeat=? WHERE id=1',(time.time() if online else 0,))
+
+    def admin(self, command):
+        with self.db() as db:
+            if command=='BOT OFF':
+                db.execute('UPDATE co_control SET enabled=0 WHERE id=1')
+                return 'Đã tắt nhận CO mới và tạm dừng lấy việc từ hàng chờ. Việc đang xử lý vẫn hoàn tất; yêu cầu cũ được giữ lại. !bot on để mở lại.'
+            if command=='BOT ON':
+                row=db.execute('SELECT heartbeat FROM co_control WHERE id=1').fetchone()
+                if time.time()-row['heartbeat']>30:
+                    return 'Chưa bật được: Mac đang offline. Mở bot trên Mac, đăng nhập MWG và nhấn Enter, sau đó gửi !bot on.'
+                db.execute('UPDATE co_control SET enabled=1 WHERE id=1')
+                return 'Đã bật nhận CO. Mac đang kết nối.'
+            if command in {'HUY CHO ALL','HUY CHỜ ALL'}:
+                states="('draft','queued','verified_queued','preview_queued')"
+                rows=db.execute('SELECT id FROM jobs WHERE state IN '+states).fetchall()
+                db.execute("UPDATE jobs SET state='cancelled',updated=?,notified=1,result='ADM cancelled waiting requests' WHERE state IN "+states,(time.time(),))
+                for row in rows:
+                    db.execute('DELETE FROM preview_replies WHERE job_id=?',(row['id'],))
+                return f'Đã hủy {len(rows)} yêu cầu chờ của tất cả người dùng, trong mọi chat. Yêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo được giữ nguyên.'
+            row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
+            counts={r['state']:r['n'] for r in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
+            online=time.time()-row['heartbeat']<=30
+            waiting=sum(counts.get(k,0) for k in ('draft','queued','verified_queued','preview_queued'))
+            active=sum(counts.get(k,0) for k in ('preview_running','running','submitting'))
+            return (f"Mac: {'online' if online else 'offline'}\nNhận CO: {'BẬT' if row['enabled'] and online else 'TẮT'}\n"
+                    f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
+
+    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False):
         now = time.time()
         with self.db() as db:
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
             if old:
                 return dict(old)
+            if require_online:
+                reason=self.unavailable(db)
+                if reason:raise BotUnavailable(reason)
             # Keep each preview pending so the owner can confirm several forms together.
             jid = secrets.token_hex(5)
             db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated) VALUES(?,?,?,?,?,?,?,?)',
@@ -92,8 +145,11 @@ class Queue:
                 "SELECT j.id,j.state FROM jobs j JOIN preview_replies p ON p.job_id=j.id WHERE p.received<?",
                 (time.time()-45,))]
 
-    def confirm(self, jid, owner, chat, cancel=False, reply_token=None):
+    def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False):
         with self.db() as db:
+            if require_online and not cancel:
+                reason=self.unavailable(db)
+                if reason:raise BotUnavailable(reason)
             job = db.execute('SELECT * FROM jobs WHERE id=? AND owner=? AND chat=?',(jid,owner,chat)).fetchone()
             if not job:
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
@@ -117,9 +173,12 @@ class Queue:
                 return None
             return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.' + self.blocked_notice(db)
 
-    def confirm_all(self, owner, chat, cancel=False, reply_token=None):
+    def confirm_all(self, owner, chat, cancel=False, reply_token=None, require_online=False):
         now = time.time()
         with self.db() as db:
+            if require_online and not cancel:
+                reason=self.unavailable(db)
+                if reason:raise BotUnavailable(reason)
             db.execute("UPDATE jobs SET state='expired',updated=? WHERE owner=? AND chat=? AND state='draft' AND created<?",
                        (now,owner,chat,now-900))
             jobs = db.execute("SELECT id,payload FROM jobs WHERE owner=? AND chat=? AND state='draft' ORDER BY created,id",
@@ -158,8 +217,11 @@ class Queue:
             message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
             return message + self.blocked_notice(db)
 
-    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False):
+    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False):
         with self.db() as db:
+            if require_online and self.unavailable(db):
+                return None
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('draft','queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-900))
             # Never automatically replay an interrupted browser operation.
             cutoff = time.time() - 900
             db.execute("UPDATE jobs SET state='failed',result=?,updated=? WHERE state='preview_running' AND updated<?",
@@ -274,7 +336,14 @@ def install(app, reply, push, default_users=()):
         prepared=body.get('prepared_id')
         if prepared is not None and (not isinstance(prepared,str) or not re.fullmatch(r'[0-9a-f]{10}',prepared)):
             abort(400)
-        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1))
+        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1,require_online=True))
+
+    @app.post('/co/worker/heartbeat')
+    def heartbeat():
+        authenticated()
+        body=request.get_json(silent=True) or {}
+        queue.heartbeat(body.get('online') is True)
+        return jsonify(ok=True)
 
     @app.get('/co/worker/status')
     def worker_status():
@@ -347,12 +416,22 @@ def install(app, reply, push, default_users=()):
 
     def handle(event):
         text=event.message.text.strip()
+        adm=admin_command(text)
         is_form=is_transfer_message(text)
         is_command=text.upper().startswith(('XACNHAN ','HUY ','SUA ','XEM '))
-        if not (is_form or is_command):
+        if not (adm or is_form or is_command):
             return False
         owner=getattr(event.source,'user_id',None)
         chat=getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None) or owner
+        if adm:
+            if not owner or owner not in set(default_users):
+                reply(event.reply_token,'Lệnh này chỉ dành cho tài khoản ADM đã được cấp quyền.'); return True
+            if adm=='LISTADM':
+                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
+                return True
+            if not enabled:
+                reply(event.reply_token,'Chức năng CO chưa được cấu hình.'); return True
+            reply(event.reply_token,queue.admin(adm)); return True
         if not enabled:
             reply(event.reply_token,'Chức năng tạo CO chưa được cấu hình.'); return True
         if not owner or owner not in users:
@@ -363,7 +442,7 @@ def install(app, reply, push, default_users=()):
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id
-                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token)
+                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token,require_online=True)
                 if job['state'] in {'preview_queued','preview_running'}:
                     if os.getenv('CO_ACK_RECEIPT','0')=='1':
                         # Consume the form token once for receipt; MWG preview follows by push.
@@ -392,13 +471,15 @@ def install(app, reply, push, default_users=()):
                 elif command.upper() == 'HUY' and jid.strip().upper() in {'CHO','CHỜ'}:
                     reply(event.reply_token,queue.cancel_waiting(owner,chat))
                 elif jid.strip().upper() == 'ALL' and command.upper() in {'XACNHAN','HUY'}:
-                    message=queue.confirm_all(owner,chat,command.upper()=='HUY',reply_token=event.reply_token)
+                    message=queue.confirm_all(owner,chat,command.upper()=='HUY',reply_token=event.reply_token,require_online=True)
                     if message is not None:
                         reply(event.reply_token,message)
                 else:
-                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None)
+                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True)
                     if message is not None:
                         reply(event.reply_token,message)
+        except BotUnavailable as error:
+            reply(event.reply_token,str(error))
         except ValueError as error:
             reply(event.reply_token,f'Form chưa hợp lệ: {error}\nVui lòng sửa và gửi lại.')
         return True
