@@ -23,7 +23,7 @@ def transfer_key(item):
 class BotUnavailable(ValueError):
     pass
 
-ADMIN_CO_COMMANDS={'BOT ON','BOT OFF','BOT STATUS','HUY CHO ALL','HUY CHỜ ALL','LISTADM'}
+ADMIN_CO_COMMANDS={'BOT ON','BOT OFF','BOT STATUS','HUY CHO ALL','HUY CHỜ ALL','LISTADM','KETQUA'}
 
 def admin_command(text):
     command=' '.join(text.strip().lstrip('!').upper().split())
@@ -59,6 +59,10 @@ class Queue:
               CREATE TABLE IF NOT EXISTS co_note_outbox (
                 job_id TEXT PRIMARY KEY, destination TEXT NOT NULL, message TEXT NOT NULL,
                 delivered INTEGER NOT NULL DEFAULT 0);
+              CREATE TABLE IF NOT EXISTS co_note_rows (
+                job_id TEXT NOT NULL, row_index INTEGER NOT NULL, message TEXT NOT NULL,
+                delivered INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(job_id,row_index));
+              CREATE TABLE IF NOT EXISTS co_note_reads (event TEXT PRIMARY KEY);
               CREATE TABLE IF NOT EXISTS co_control (
                 id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL, heartbeat REAL NOT NULL);
               INSERT INTO co_control(id,enabled,heartbeat) VALUES(1,1,0) ON CONFLICT(id) DO NOTHING;
@@ -321,6 +325,36 @@ class Queue:
                                (jid,NOTE_GROUP,message))
             return True
 
+    def reply_notes(self, event_id, send):
+        # Serialize reads so simultaneous ADM commands cannot select the same rows.
+        with self.db() as db:
+            if db.execute('SELECT event FROM co_note_reads WHERE event=?',(event_id,)).fetchone():
+                return
+            for notice in db.execute('SELECT * FROM co_note_outbox WHERE delivered=0 AND destination=? ORDER BY job_id',(NOTE_GROUP,)).fetchall():
+                header,*blocks=notice['message'].split('\n\n')
+                for index,block in enumerate(blocks):
+                    db.execute('INSERT INTO co_note_rows(job_id,row_index,message) VALUES(?,?,?) ON CONFLICT(job_id,row_index) DO NOTHING',
+                               (notice['job_id'],index,header+'\n'+block))
+            rows=db.execute('SELECT * FROM co_note_rows WHERE delivered=0 ORDER BY job_id,row_index').fetchall()
+            selected=[]; blocks=[]
+            for row in rows[:10]:
+                block=f"{len(selected)+1}. {row['message']}"
+                if len(('\n\n'.join(blocks+[block])).encode('utf-16-le'))//2>18000:
+                    break
+                selected.append(row);blocks.append(block)
+            remaining=len(rows)-len(selected)
+            text=(f"Kết quả CO — {len(selected)}/{len(rows)} CO chưa báo\n\n"+'\n\n'.join(blocks)+
+                  (f"\n\nCòn {remaining} CO. Gửi !ketqua để lấy tiếp." if remaining else '\n\nĐã hết kết quả đang chờ.')
+                  if selected else 'Chưa có CO thành công mới cần báo.')
+            if send(text) is not True:
+                return
+            for row in selected:
+                db.execute('UPDATE co_note_rows SET delivered=1 WHERE job_id=? AND row_index=?',(row['job_id'],row['row_index']))
+            for jid in {row['job_id'] for row in selected}:
+                if not db.execute('SELECT 1 FROM co_note_rows WHERE job_id=? AND delivered=0',(jid,)).fetchone():
+                    db.execute('UPDATE co_note_outbox SET delivered=1 WHERE job_id=?',(jid,))
+            db.execute('INSERT INTO co_note_reads(event) VALUES(?)',(event_id,))
+
     def notifications(self):
         with self.db() as db:
             return [dict(x) for x in db.execute("SELECT * FROM jobs WHERE (state IN ('succeeded','failed','unknown') OR (state='draft' AND result='MWG_PREVIEW')) AND notified=0")]
@@ -446,25 +480,6 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 app.logger.warning('CO notification pending; will retry.')
             break
 
-        # Separate durable delivery: requester replies never mark NOTE delivered.
-        with queue.db() as db:
-            notices=[dict(row) for row in db.execute('SELECT * FROM co_note_outbox WHERE delivered=0')]
-        for notice in notices:
-            key=('note',notice['job_id'])
-            if time.monotonic()<next_notice.get(key,0):
-                continue
-            next_notice[key]=time.monotonic()+60
-            import uuid
-            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-note:'+notice['destination']+':'+notice['job_id']))
-            try:
-                if push(notice['destination'],notice['message'],retry_key):
-                    with queue.db() as db:
-                        db.execute('UPDATE co_note_outbox SET delivered=1 WHERE job_id=?',(notice['job_id'],))
-                    next_notice.pop(key,None)
-            except Exception:
-                app.logger.warning('NOTE CO delivery pending; will retry.')
-            break
-
     def handle(event):
         text=event.message.text.strip()
         adm=admin_command(text)
@@ -478,10 +493,16 @@ def install(app, reply, push, default_users=(), requester_name=None):
             if not owner or owner not in set(default_users):
                 reply(event.reply_token,'Lệnh này chỉ dành cho tài khoản ADM đã được cấp quyền.'); return True
             if adm=='LISTADM':
-                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
+                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!ketqua — lấy tối đa 10 CO chưa báo trong nhóm NOTE\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
                 return True
             if not enabled:
                 reply(event.reply_token,'Chức năng CO chưa được cấu hình.'); return True
+            if adm=='KETQUA':
+                if chat!=NOTE_GROUP:
+                    reply(event.reply_token,'Gửi !ketqua trong nhóm NOTE để lấy kết quả CO.'); return True
+                event_id=getattr(event,'webhook_event_id',None) or 'message:'+event.message.id
+                queue.reply_notes(event_id,lambda text:reply(event.reply_token,text))
+                return True
             reply(event.reply_token,queue.admin(adm)); return True
         if not enabled:
             reply(event.reply_token,'Chức năng tạo CO chưa được cấu hình.'); return True
