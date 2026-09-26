@@ -127,7 +127,7 @@ def parse_request(text):
         return items[0]
     if len({item['status'] for item in items})!=1:
         raise ValueError('Các dòng trong cùng file phải cùng trạng thái sản phẩm. Gửi riêng các trạng thái khác nhau.')
-    identities=[(item['source'],item['destination'],item['product']) for item in items]
+    identities=[(str(int(item['source'])),str(int(item['destination'])),item['product'],item['quantity']) for item in items]
     if len(set(identities))!=len(identities):
-        raise ValueError('Có dòng trùng kho xuất, kho nhận và sản phẩm. Gộp số lượng rồi gửi lại để tránh tạo trùng.')
+        raise ValueError('Có dòng trùng kho xuất, kho nhận, mã sản phẩm và số lượng. Bỏ dòng trùng rồi gửi lại.')
     return {'items':items,'status':items[0]['status'],'batch_version':1}

@@ -12,6 +12,12 @@ from pathlib import Path
 from transfer_parser import parse_form, parse_request, is_transfer_message
 from co_results import items, preview_names, decode_results, result_text
 
+class DuplicateRequest(ValueError):
+    pass
+
+def transfer_key(item):
+    return (str(int(item['source'])),str(int(item['destination'])),item['product'].strip(),int(item['quantity']))
+
 class BotUnavailable(ValueError):
     pass
 
@@ -115,7 +121,7 @@ class Queue:
             return (f"Mac: {'online' if online else 'offline'}\nNhận CO: {'BẬT' if row['enabled'] and online else 'TẮT'}\n"
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
-    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False):
+    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False):
         now = time.time()
         with self.db() as db:
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
@@ -124,6 +130,21 @@ class Queue:
             if require_online:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
+            if check_duplicates:
+                incoming=[transfer_key(item) for item in items(payload)]
+                if len(set(incoming))!=len(incoming):
+                    raise DuplicateRequest('Có dòng trùng cả kho xuất, kho nhận, mã sản phẩm và số lượng trong tin nhắn. Chưa nhận yêu cầu này.')
+                candidates=db.execute("SELECT id,payload,state,created FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
+                clashes=[]
+                for candidate in candidates:
+                    if candidate['state'] in {'draft','queued','verified_queued','preview_queued'} and candidate['created']<now-900:
+                        continue
+                    existing={transfer_key(item) for item in items(json.loads(candidate['payload']))}
+                    for number,key in enumerate(incoming,1):
+                        if key in existing:
+                            clashes.append(f"Dòng {number} trùng yêu cầu {candidate['id']}")
+                if clashes:
+                    raise DuplicateRequest('Cảnh báo tạo trùng: cùng kho xuất, kho nhận, mã sản phẩm và số lượng với yêu cầu đang chờ, đang xử lý hoặc chưa rõ kết quả.\n'+'\n'.join(clashes)+'\nChưa nhận tin nhắn này; bỏ dòng trùng rồi gửi lại các dòng còn lại.')
             # Keep each preview pending so the owner can confirm several forms together.
             jid = secrets.token_hex(5)
             db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated) VALUES(?,?,?,?,?,?,?,?)',
@@ -442,7 +463,7 @@ def install(app, reply, push, default_users=()):
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id
-                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token,require_online=True)
+                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token,require_online=True,check_duplicates=True)
                 if job['state'] in {'preview_queued','preview_running'}:
                     if os.getenv('CO_ACK_RECEIPT','0')=='1':
                         # Consume the form token once for receipt; MWG preview follows by push.
@@ -478,6 +499,8 @@ def install(app, reply, push, default_users=()):
                     message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True)
                     if message is not None:
                         reply(event.reply_token,message)
+        except DuplicateRequest as error:
+            reply(event.reply_token,str(error))
         except BotUnavailable as error:
             reply(event.reply_token,str(error))
         except ValueError as error:
