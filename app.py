@@ -301,7 +301,7 @@ handle_co, notify_co = co_flow.install(app, reply_text, push_co_result, config.A
     requester_name=lambda event: source_name(
         'group_user' if getattr(event.source,'group_id',None) else 'room_user' if getattr(event.source,'room_id',None) else 'user',
         getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None), event.source.user_id))
-scheduler.add_job(notify_co, 'interval', seconds=2, id='co_result_notifications', max_instances=1)
+scheduler.add_job(notify_co, 'interval', seconds=1, id='co_result_notifications', max_instances=1)
 scheduler.start()
 
 

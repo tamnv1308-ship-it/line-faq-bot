@@ -116,12 +116,21 @@ def cancel_import(page):
     if cancel.is_visible():
         cancel.click()
 
+def wait_ui(page, ready, message, timeout=15):
+    deadline=time.monotonic()+timeout
+    while not ready():
+        if time.monotonic()>=deadline:
+            raise RuntimeError(message)
+        page.wait_for_timeout(100)
+
+
 def select_brands(page):
     desired={'1 - thegioididong','2 - dienmayxanh','16 - TopZone'}
     control=page.locator('input[role="listbox"]')
     control.wait_for(state='visible',timeout=15000)
     control.click()
-    page.wait_for_timeout(700)
+    wait_ui(page,lambda: bool(control.get_attribute('aria-owns')),
+            'Danh sách thương hiệu chưa sẵn sàng; chưa nhập file.')
     owns=(control.get_attribute('aria-owns') or '').split()
     if not owns:
         raise RuntimeError('Danh sách thương hiệu chưa sẵn sàng; chưa nhập file.')
@@ -134,15 +143,14 @@ def select_brands(page):
         if selected != (label in desired):
             if not option.is_visible():
                 control.click()
-                page.wait_for_timeout(500)
+                option.wait_for(state='visible',timeout=15000)
             option.click()
-            page.wait_for_timeout(700)
-    page.wait_for_timeout(1000)
+            wait_ui(page,lambda: ('k-state-selected' in (option.get_attribute('class') or '').split()) == (label in desired),
+                    'Thương hiệu chưa cập nhật; chưa nhập file.')
     selected={text.strip() for text in choices.locator('.k-state-selected').all_text_contents()}
     if selected != desired:
         raise RuntimeError('Không chọn đúng ba thương hiệu TGDD, DMX, TopZone.')
     control.press('Escape')
-    page.wait_for_timeout(500)
 
 def select_product_status(page, status):
     labels={'Mới':'1 - Mới','Đã sử dụng':'2 - Đã sử dụng','Mới giảm giá':'8 - Mới (Giảm giá)'}
@@ -154,7 +162,8 @@ def select_product_status(page, status):
         return
     control.press('Alt+ArrowDown')
     page.get_by_role('option',name=labels[status],exact=True).click()
-    page.wait_for_timeout(700)
+    wait_ui(page,lambda: control.input_value().strip()==labels[status],
+            'Không xác nhận được trạng thái '+status+'; chưa nhập file.')
     if control.input_value().strip()!=labels[status]:
         raise RuntimeError('Không xác nhận được trạng thái '+status+'; chưa nhập file.')
 
@@ -422,7 +431,8 @@ def main():
                     except Exception as error:
                         print('Không tải lại được trang MWG: '+type(error).__name__,flush=True)
                     refresh_at=time.monotonic()+300
-                time.sleep(1 if prepared_id else 2)
+                if not job:
+                    time.sleep(0.5 if prepared_id else 1)
         context.close()
 
 if __name__=='__main__':
