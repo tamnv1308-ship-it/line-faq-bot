@@ -10,7 +10,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message
-from co_results import items, preview_names, decode_results, result_text
+from co_results import items, preview_names, decode_results, result_text, note_group_text
+
+NOTE_GROUP = 'C4f38e1a465a6dd1b0a3cd5c175f84c62'
 
 class DuplicateRequest(ValueError):
     pass
@@ -54,6 +56,9 @@ class Queue:
                 result TEXT, notified INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS preview_replies (
                 job_id TEXT PRIMARY KEY, token TEXT NOT NULL, received REAL NOT NULL);
+              CREATE TABLE IF NOT EXISTS co_note_outbox (
+                job_id TEXT PRIMARY KEY, destination TEXT NOT NULL, message TEXT NOT NULL,
+                delivered INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS co_control (
                 id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL, heartbeat REAL NOT NULL);
               INSERT INTO co_control(id,enabled,heartbeat) VALUES(1,1,0) ON CONFLICT(id) DO NOTHING;
@@ -308,6 +313,12 @@ class Queue:
             if state not in allowed.get(job['state'], set()):
                 return False
             db.execute('UPDATE jobs SET state=?,result=?,updated=?,notified=0 WHERE id=?',(state,result,time.time(),jid))
+            if state in {'succeeded','unknown'}:
+                completed=dict(job); completed.update(state=state,result=result)
+                message=note_group_text(completed)
+                if message:
+                    db.execute('INSERT INTO co_note_outbox(job_id,destination,message) VALUES(?,?,?) ON CONFLICT(job_id) DO NOTHING',
+                               (jid,NOTE_GROUP,message))
             return True
 
     def notifications(self):
@@ -331,7 +342,7 @@ class PostgresStatements:
     def executescript(self, statement):
         return self.execute(statement)
 
-def install(app, reply, push, default_users=()):
+def install(app, reply, push, default_users=(), requester_name=None):
     from flask import request, jsonify, abort
     enabled = os.getenv('CO_ENABLED') == '1'
     queue = None
@@ -435,6 +446,25 @@ def install(app, reply, push, default_users=()):
                 app.logger.warning('CO notification pending; will retry.')
             break
 
+        # Separate durable delivery: requester replies never mark NOTE delivered.
+        with queue.db() as db:
+            notices=[dict(row) for row in db.execute('SELECT * FROM co_note_outbox WHERE delivered=0')]
+        for notice in notices:
+            key=('note',notice['job_id'])
+            if time.monotonic()<next_notice.get(key,0):
+                continue
+            next_notice[key]=time.monotonic()+60
+            import uuid
+            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-note:'+notice['destination']+':'+notice['job_id']))
+            try:
+                if push(notice['destination'],notice['message'],retry_key):
+                    with queue.db() as db:
+                        db.execute('UPDATE co_note_outbox SET delivered=1 WHERE job_id=?',(notice['job_id'],))
+                    next_notice.pop(key,None)
+            except Exception:
+                app.logger.warning('NOTE CO delivery pending; will retry.')
+            break
+
     def handle(event):
         text=event.message.text.strip()
         adm=admin_command(text)
@@ -460,6 +490,10 @@ def install(app, reply, push, default_users=()):
         try:
             if is_form:
                 payload=parse_request(text)
+                try:
+                    payload['requester_name']=requester_name(event) if requester_name else owner
+                except Exception:
+                    payload['requester_name']=owner
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id

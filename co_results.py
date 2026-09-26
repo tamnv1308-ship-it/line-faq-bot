@@ -56,3 +56,21 @@ def result_text(job):
     if job['state']=='unknown':
         blocks.append('Có dòng chưa rõ kết quả. Kiểm tra MWG trước khi tạo lại; không gửi lại các dòng đã có mã CO.')
     return '\n\n'.join(blocks)
+
+
+def note_group_text(job):
+    """Only confirmed successful rows; no historical backfill or guessed COs."""
+    payload=json.loads(job['payload']); data=items(payload)
+    try:
+        rows=decode_results(payload,job['result'] or '')
+    except (ValueError,TypeError):
+        if len(data)!=1 or job['state']!='succeeded' or not re.fullmatch(r'[0-9A-Z]+CO[0-9]+',job['result'] or ''):
+            return ''
+        rows=[{'co':job['result'],'error':''}]
+    blocks=[]
+    for item,row in zip(data,rows):
+        if row['co'] and not row['error']:
+            blocks.append(f"Tên sản phẩm: {item.get('product_name','Chưa lấy được tên sản phẩm từ MWG')}\nCO: {row['co']}\nSố lượng: {item['quantity']}")
+    if not blocks:
+        return ''
+    return f"Đã tạo CO — {job['id']}\nNgười yêu cầu: {payload.get('requester_name') or job['owner']}\n\n"+'\n\n'.join(blocks)
