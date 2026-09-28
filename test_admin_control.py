@@ -18,7 +18,7 @@ class AdminTests(unittest.TestCase):
         with patch.dict('sys.modules',{'flask':types.SimpleNamespace(request=None,jsonify=None,abort=None)}):
             self.handle,_=install(app,lambda token,text:self.replies.append(text),lambda *a:True,['admin'])
     def event(self,text,owner='admin'):
-        return types.SimpleNamespace(reply_token='reply',webhook_event_id='event',source=types.SimpleNamespace(user_id=owner),message=types.SimpleNamespace(id='msg',text=text))
+        return types.SimpleNamespace(reply_token='reply',webhook_event_id='event',source=types.SimpleNamespace(user_id=owner,group_id=owner),message=types.SimpleNamespace(id='msg',text=text))
     def test_offline_rejects_form_without_queueing(self):
         self.handle(self.event('Kho xuất: 1\nKho nhận: 2\nMSP: 003','operator'))
         self.assertIn('offline',self.replies[-1])
