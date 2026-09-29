@@ -12,6 +12,9 @@ from pathlib import Path
 from transfer_parser import parse_form, parse_request, is_transfer_message
 from co_results import items, preview_names, decode_results, result_text, note_group_text
 
+MEMBER_CO_GROUP = 'Cb71979a134ed1fd580e3e9d133f1d29f'
+DISABLED_CO_GROUP = 'Ca6ebad8571ec436ed0cc4a68729d22c0'
+
 PRIVATE_CO_OWNER = 'U60751d1a57eb4707a3dff9c06f3240a4'
 
 NOTE_GROUP = 'C4f38e1a465a6dd1b0a3cd5c175f84c62'
@@ -506,12 +509,15 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 queue.reply_notes(event_id,lambda text:reply(event.reply_token,text))
                 return True
             reply(event.reply_token,queue.admin(adm)); return True
+        group_id=getattr(event.source,'group_id',None)
+        if group_id==DISABLED_CO_GROUP and (is_form or text.upper().startswith('XACNHAN ')):
+            reply(event.reply_token,'Đã ngừng nhận và xác nhận CO trong nhóm Apple Bot. Vui lòng gửi yêu cầu trong nhóm TÁO - CÔNG CỤ HỖ TRỢ.'); return True
         private_chat=not (getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None))
         if private_chat and owner!=PRIVATE_CO_OWNER and (is_form or text.upper().startswith('XACNHAN ')):
             reply(event.reply_token,'Bot không nhận yêu cầu tạo CO qua tin nhắn riêng của tài khoản này. Vui lòng gửi trong nhóm được phép.'); return True
         if not enabled:
             reply(event.reply_token,'Chức năng tạo CO chưa được cấu hình.'); return True
-        if not owner or owner not in users:
+        if not owner or (owner not in users and group_id!=MEMBER_CO_GROUP):
             reply(event.reply_token,'Tài khoản chưa được cấp quyền tạo CO.'); return True
         try:
             if is_form:
