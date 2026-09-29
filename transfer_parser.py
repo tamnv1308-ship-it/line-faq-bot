@@ -5,7 +5,7 @@ import unicodedata
 ALIASES = {
     'source': ['kho xuat', 'ma kho xuat', 'kho chuyen', 'ma kho chuyen'],
     'destination': ['kho nhan hang', 'kho nhan', 'kho nhap', 'ma kho nhan', 'ma kho nhap'],
-    'product': ['ma san pham', 'ma sp', 'msp', 'sku', 'sp'],
+    'product': ['ma san pham', 'san pham', 'ma sp', 'msp', 'sku', 'sp', 'code'],
     'quantity': ['so luong', 'sl'],
     'note': ['ghi chu', 'note'],
     'status': ['trang thai san pham', 'trang thai'],
@@ -40,7 +40,7 @@ def parts(text):
             key=LOOKUP[re.sub(r'[ \t]+',' ',match.group(1).lower())]
             value=line[match.end():end].strip()
             # SP also labels a product name in pasted requests. Only numeric SP is an ID.
-            if match.group(1).lower()=='sp' and not re.match(r'^[0-9]',value):
+            if re.sub(r'[ \t]+',' ',match.group(1).lower()) in {'sp','san pham'} and not re.match(r'^[0-9]',value):
                 yield None,value
             else:
                 yield key,value
