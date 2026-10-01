@@ -1,4 +1,4 @@
-from co_results import message_chunks
+from co_results import message_chunks, line_text_messages
 import os
 import random
 import secrets
@@ -21,6 +21,9 @@ from linebot.v3.messaging import (
     PushMessageRequest,
     ReplyMessageRequest,
     TextMessage,
+    QuickReply,
+    QuickReplyItem,
+    MessageAction,
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
@@ -56,7 +59,7 @@ def push_to_group(group_id, text):
             MessagingApi(api_client).push_message(
                 PushMessageRequest(
                     to=group_id,
-                    messages=[TextMessage(text=part) for part in message_chunks(text)],
+                    messages=[TextMessage(text=m['text'],quick_reply=QuickReply(items=[QuickReplyItem(action=MessageAction(**i['action'])) for i in m['quickReply']['items']]) if 'quickReply' in m else None) for m in line_text_messages(text)],
                 )
             )
         return True, None
@@ -97,7 +100,7 @@ def reply_text(reply_token, text):
             MessagingApi(api_client).reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
-                    messages=[TextMessage(text=part) for part in message_chunks(text)],
+                    messages=[TextMessage(text=m['text'],quick_reply=QuickReply(items=[QuickReplyItem(action=MessageAction(**i['action'])) for i in m['quickReply']['items']]) if 'quickReply' in m else None) for m in line_text_messages(text)],
                 )
             )
         return True
@@ -284,7 +287,7 @@ def push_co_result(chat, text, retry_key):
     import urllib.request
     import urllib.error
     import json
-    payload = json.dumps({'to': chat, 'messages': [{'type': 'text', 'text': part} for part in message_chunks(text)]}).encode()
+    payload = json.dumps({'to': chat, 'messages': line_text_messages(text)}).encode()
     req = urllib.request.Request('https://api.line.me/v2/bot/message/push', data=payload,
         headers={'Authorization': 'Bearer ' + config.CHANNEL_ACCESS_TOKEN,
                  'Content-Type': 'application/json', 'X-Line-Retry-Key': retry_key})

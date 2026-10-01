@@ -5,7 +5,7 @@ import unicodedata
 ALIASES = {
     'source': ['kho xuat', 'ma kho xuat', 'kho chuyen', 'ma kho chuyen'],
     'destination': ['kho nhan hang', 'kho nhan', 'kho nhap', 'ma kho nhan', 'ma kho nhap'],
-    'product': ['ma san pham', 'san pham', 'ma sp', 'msp', 'sku', 'sp', 'code'],
+    'product': ['ma san pham', 'san pham', 'ma sp', 'ma code', 'msp', 'sku', 'sp', 'code'],
     'quantity': ['so luong', 'sl'],
     'note': ['ghi chu', 'note'],
     'status': ['trang thai san pham', 'trang thai'],
@@ -15,7 +15,7 @@ LABELS = {'source': 'Kho xuất', 'destination': 'Kho nhận',
 LOOKUP = {alias: key for key, aliases in ALIASES.items() for alias in aliases}
 LABEL = '|'.join(re.escape(a).replace(r'\ ', r'[ \t]+') for a in sorted(LOOKUP,key=len,reverse=True))
 # Restrict labels to line/semicolon/pipe boundaries, not numbers inside prose or @mentions.
-FIELD = re.compile(r'(?:^|[;|])[ \t]*(?:[-*•][ \t]*)?('+LABEL+r')(?=[ \t]*(?:[:：=]|[0-9])|[ \t]*$)[ \t]*(?:[:：=][ \t]*)?',re.I)
+FIELD = re.compile(r'(?:^|[;|])[ \t]*(?:(?:[-*•]|[0-9]+[.)])[ \t]*)?('+LABEL+r')(?=[ \t]*(?:[:：=]|[0-9])|[ \t]*$)[ \t]*(?:[:：=][ \t]*)?',re.I)
 
 
 def fold(text):

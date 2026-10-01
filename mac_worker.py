@@ -167,28 +167,40 @@ def select_product_status(page, status):
     if control.input_value().strip()!=labels[status]:
         raise RuntimeError('Không xác nhận được trạng thái '+status+'; chưa nhập file.')
 
+def wait_product_status(page, control, timeout=20):
+    # Require a nonempty value to stay stable for one second, not a transient render.
+    deadline=time.monotonic()+timeout
+    previous=None
+    stable_since=None
+    while time.monotonic()<deadline:
+        value=control.input_value().strip() if control.is_visible() else ''
+        now=time.monotonic()
+        if value and value==previous:
+            if stable_since is not None and now-stable_since>=1:
+                return True
+        else:
+            previous=value
+            stable_since=now if value else None
+        page.wait_for_timeout(500)
+    return False
+
+
 def prepare_import_controls(page, job):
-    # Run only before a new import, never while holding a row for confirmation.
+    # Wait for MWG both before and after brand loading before retrying a reload.
     control=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
     for attempt in range(3):
-        control.wait_for(state='visible',timeout=15000)
-        for _ in range(6):
-            if control.input_value().strip():
-                break
-            page.wait_for_timeout(500)
-        if control.input_value().strip():
+        if wait_product_status(page,control):
             progress(job,'select_brands')
             select_brands(page)
-            # Brand loading may clear the status widget again.
-            if control.input_value().strip():
+            if wait_product_status(page,control):
                 progress(job,'select_product_status')
                 select_product_status(page,job['payload'].get('status','Mới'))
                 return
         if attempt<2:
             progress(job,'reload_blank_product_status')
+            page.wait_for_timeout(2000)
             page.reload(wait_until='domcontentloaded',timeout=30000)
-            page.get_by_role('button',name='Tạo CO',exact=True).wait_for(timeout=30000)
-    raise RuntimeError('Ô trạng thái sản phẩm vẫn trống sau 3 lần kiểm tra và tải lại MWG; chưa nhập file, chưa tạo CO. Vui lòng thử lại khi trang tải đầy đủ.')
+    raise RuntimeError('Ô trạng thái sản phẩm vẫn chưa sẵn sàng sau 3 lượt chờ (tối đa 20 giây mỗi bước kiểm tra); chưa nhập file, chưa tạo CO. Vui lòng thử lại khi MWG tải đầy đủ.')
 
 def process(page, job, prepared_id=None):
     submitting=False
@@ -262,7 +274,7 @@ def process(page, job, prepared_id=None):
         if not all(names):
             raise RuntimeError('MWG chưa trả đủ tên sản phẩm; chưa tạo CO.')
         if job.get('mode')=='preview':
-            report(job,'preview_ready',json.dumps(names,ensure_ascii=False) if 'items' in job['payload'] else names[0])
+            report(job,'preview_ready',json.dumps({'rows':[{'product_name':cells[4].strip(),'source_name':cells[1].strip(),'destination_name':cells[2].strip()} for cells in matched]},ensure_ascii=False))
             return job['id']
         for data,name in zip(records,names):
             if data.get('product_name') and name!=data['product_name']:

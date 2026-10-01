@@ -18,7 +18,10 @@ def items(payload):
     return payload.get('items') or [payload]
 
 def preview_names(payload, result):
-    names=json.loads(result) if 'items' in payload else [result]
+    if result.startswith('{'):
+        names=[r['product_name'] for r in preview_details(payload,result)]
+    else:
+        names=json.loads(result) if 'items' in payload else [result]
     if not isinstance(names,list) or len(names)!=len(items(payload)):
         raise ValueError('Sai số dòng tên sản phẩm.')
     if any(not isinstance(name,str) or not name.strip() or len(name)>300 for name in names):
@@ -74,3 +77,28 @@ def note_group_text(job):
     if not blocks:
         return ''
     return f"Đã tạo CO — {job['id']}\nNgười yêu cầu: {payload.get('requester_name') or job['owner']}\n\n"+'\n\n'.join(blocks)
+
+
+def preview_details(payload,result):
+    data=json.loads(result)
+    rows=data.get('rows') if isinstance(data,dict) else None
+    if not isinstance(rows,list) or len(rows)!=len(items(payload)):
+        raise ValueError('Sai số dòng thông tin MWG.')
+    for item,row in zip(items(payload),rows):
+        if not isinstance(row,dict) or any(not isinstance(row.get(k),str) or not row[k].strip() or len(row[k])>500 for k in ('product_name','source_name','destination_name')):
+            raise ValueError('Thông tin MWG không hợp lệ.')
+        for key in ('source','destination'):
+            match=re.match(r'^(\d+)\b',row[key+'_name'].strip())
+            if not match or int(match.group(1))!=int(item[key]):
+                raise ValueError('Mã kho MWG không khớp.')
+    return rows
+
+
+def line_text_messages(text):
+    messages=[{'type':'text','text':part} for part in message_chunks(text)]
+    match=re.match(r'^Xác nhận tạo CO — ([0-9a-f]{10})\b',text)
+    if match:
+        jid=match.group(1)
+        messages[-1]['quickReply']={'items':[{'type':'action','action':{'type':'message','label':label,'text':command}} for label,command in
+            [('Xác nhận','XACNHAN '+jid),('Hủy CO','HUY '+jid),('Hủy chờ','HUY CHO')]]}
+    return messages

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message
-from co_results import items, preview_names, decode_results, result_text, note_group_text
+from co_results import items, preview_names, decode_results, result_text, note_group_text, preview_details
 
 MEMBER_CO_GROUP = 'Cb71979a134ed1fd580e3e9d133f1d29f'
 DISABLED_CO_GROUP = 'Ca6ebad8571ec436ed0cc4a68729d22c0'
@@ -38,7 +38,7 @@ def preview_text(job):
     p=json.loads(job['payload']);jid=job['id']
     blocks=[f"Xác nhận tạo CO — {jid}"]
     for n,item in enumerate(items(p),1):
-        blocks.append(f"{n}. Kho xuất: {item['source']} → Kho nhận: {item['destination']}\n"
+        blocks.append(f"{n}. Kho xuất: {item.get('source_name',item['source'])} → Kho nhận: {item.get('destination_name',item['destination'])}\n"
                       f"Tên sản phẩm MWG: {item.get('product_name','Chưa kiểm tra')}\n"
                       f"Số lượng: {item['quantity']}{' (mặc định)' if item.get('quantity_defaulted') else ''}\n"
                       f"Note: {item['note']}\nTrạng thái: {item.get('status','Mới')}")
@@ -297,12 +297,16 @@ class Queue:
                 payload=json.loads(job['payload'])
                 try:
                     names=preview_names(payload,result)
+                    details=preview_details(payload,result) if result.startswith('{') else None
                 except (ValueError,TypeError):
                     return False
                 if job['state']=='draft':
                     return job['result']=='MWG_PREVIEW' and [item.get('product_name') for item in items(payload)]==names
                 for item,name in zip(items(payload),names):
                     item['product_name']=name
+                if details:
+                    for item,detail in zip(items(payload),details):
+                        item.update(source_name=detail['source_name'].strip(),destination_name=detail['destination_name'].strip())
                 if 'items' in payload:
                     payload['product_name']='MWG_BATCH_READY'
                 now=time.time()
