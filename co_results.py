@@ -96,9 +96,9 @@ def preview_details(payload,result):
 
 def line_text_messages(text):
     messages=[{'type':'text','text':part} for part in message_chunks(text)]
-    match=re.match(r'^Xác nhận tạo CO — ([0-9a-f]{10})\b',text)
+    match=re.match(r'^Xác nhận tạo CO — ([0-9a-f]{10})\b',text,re.IGNORECASE)
     if match:
         jid=match.group(1)
         messages[-1]['quickReply']={'items':[{'type':'action','action':{'type':'message','label':label,'text':command}} for label,command in
-            [('Xác nhận','XACNHAN '+jid),('Hủy CO','HUY '+jid),('Hủy chờ','HUY CHO')]]}
+            [('Xác nhận','XACNHAN '+jid),('Hủy','HUY '+jid)]]}
     return messages

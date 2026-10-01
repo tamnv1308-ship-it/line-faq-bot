@@ -36,14 +36,16 @@ def admin_command(text):
 
 def preview_text(job):
     p=json.loads(job['payload']);jid=job['id']
-    blocks=[f"Xác nhận tạo CO — {jid}"]
-    for n,item in enumerate(items(p),1):
-        blocks.append(f"{n}. Kho xuất: {item.get('source_name',item['source'])} → Kho nhận: {item.get('destination_name',item['destination'])}\n"
-                      f"Tên sản phẩm MWG: {item.get('product_name','Chưa kiểm tra')}\n"
-                      f"Số lượng: {item['quantity']}{' (mặc định)' if item.get('quantity_defaulted') else ''}\n"
-                      f"Note: {item['note']}\nTrạng thái: {item.get('status','Mới')}")
-    blocks.append(f"Thương hiệu: TGDD, DMX, TopZone\nGửi XACNHAN {jid} để tạo; HUY {jid} để hủy.\n"
-                  "XACNHAN ALL / HUY ALL: áp dụng các bản đang chờ xác nhận. HUY CHO: hủy yêu cầu Mac chưa nhận.\nHiệu lực: 15 phút.")
+    blocks=[f"XÁC NHẬN TẠO CO — {jid}"]
+    rows=items(p)
+    for n,item in enumerate(rows,1):
+        prefix=f"{n}. " if len(rows)>1 else ""
+        blocks.append(f"{prefix}Kho xuất: {item.get('source_name',item['source'])}\n"
+                      f"Kho nhận: {item.get('destination_name',item['destination'])}\n\n"
+                      f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
+                      f"Số lượng: {item['quantity']}\n"
+                      f"Trạng thái: {item.get('status','Mới')}\nNote: {item['note']}")
+    blocks.append(f"XACNHAN {jid}\nHUY {jid}\n\nHiệu lực: 5 phút")
     return '\n\n'.join(blocks)
 
 class Queue:
@@ -100,7 +102,7 @@ class Queue:
     def unavailable(self, db):
         row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
         if not row['enabled']:
-            return 'Bot CO đang tạm nghỉ theo lệnh ADM. Yêu cầu mới chưa được lưu; vui lòng gửi lại sau.'
+            return 'Bot đang tạm ngừng nhận yêu cầu CO. Chưa lưu yêu cầu; vui lòng gửi lại khi bot hoạt động.'
         if time.time()-row['heartbeat']>30:
             return 'Bot trên Mac đang offline hoặc mất kết nối. Chưa nhận yêu cầu CO; vui lòng gửi lại khi Mac hoạt động.'
         return ''
@@ -151,7 +153,7 @@ class Queue:
                 candidates=db.execute("SELECT id,payload,state,created FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
                 clashes=[]
                 for candidate in candidates:
-                    if candidate['state'] in {'draft','queued','verified_queued','preview_queued'} and candidate['created']<now-900:
+                    if candidate['state'] in {'draft','queued','verified_queued','preview_queued'} and candidate['created']<now-300:
                         continue
                     existing={transfer_key(item) for item in items(json.loads(candidate['payload']))}
                     for number,key in enumerate(incoming,1):
@@ -197,7 +199,7 @@ class Queue:
                 return 'Mac đang kiểm tra tên sản phẩm trên MWG. Chưa tạo CO; chờ bản xác nhận có tên sản phẩm.'
             if job['state'] != 'draft':
                 return 'Yêu cầu đã được xử lý hoặc hủy; không tạo thêm bản trùng.'
-            if time.time() - job['created'] > 900:
+            if time.time() - job['created'] > 300:
                 db.execute("UPDATE jobs SET state='expired' WHERE id=?",(jid,))
                 return 'Xác nhận đã hết hạn. Vui lòng gửi lại form.'
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
@@ -215,7 +217,7 @@ class Queue:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
             db.execute("UPDATE jobs SET state='expired',updated=? WHERE owner=? AND chat=? AND state='draft' AND created<?",
-                       (now,owner,chat,now-900))
+                       (now,owner,chat,now-300))
             jobs = db.execute("SELECT id,payload FROM jobs WHERE owner=? AND chat=? AND state='draft' ORDER BY created,id",
                               (owner,chat)).fetchall()
             if not jobs:
@@ -256,7 +258,7 @@ class Queue:
         with self.db() as db:
             if require_online and self.unavailable(db):
                 return None
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('draft','queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-900))
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('draft','queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-300))
             # Never automatically replay an interrupted browser operation.
             cutoff = time.time() - 900
             db.execute("UPDATE jobs SET state='failed',result=?,updated=? WHERE state='preview_running' AND updated<?",
