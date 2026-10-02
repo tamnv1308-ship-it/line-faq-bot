@@ -304,6 +304,14 @@ handle_co, notify_co = co_flow.install(app, reply_text, push_co_result, config.A
     requester_name=lambda event: source_name(
         'group_user' if getattr(event.source,'group_id',None) else 'room_user' if getattr(event.source,'room_id',None) else 'user',
         getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None), event.source.user_id))
+def reply_summary_image(token,url):
+    with ApiClient(configuration) as client:
+        MessagingApi(client).reply_message(ReplyMessageRequest(reply_token=token,
+            messages=[ImageMessage(original_content_url=url,preview_image_url=url)]))
+
+import co_summary
+handle_summary=co_summary.install(app,reply_text,reply_summary_image,scheduler,config.REPORT_PUBLIC_BASE_URL)
+
 scheduler.add_job(notify_co, 'interval', seconds=1, id='co_result_notifications', max_instances=1)
 scheduler.start()
 
@@ -390,6 +398,8 @@ def log_message_source(event):
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     log_message_source(event)
+    if handle_summary(event):
+        return
     if (co_flow.admin_command(event.message.text) or not event.message.text.strip().startswith(config.BOT_PREFIX)) and handle_co(event):
         return
     user_text = event.message.text.strip()
@@ -410,6 +420,7 @@ def handle_message(event):
 
     if (
         command_name in admin_commands
+        and user_id != co_flow.PRIVATE_CO_OWNER
         and user_id not in config.ADMIN_USER_IDS
     ):
         reply_text(event.reply_token,'Lệnh này chỉ dành cho tài khoản ADM đã được cấp quyền.')

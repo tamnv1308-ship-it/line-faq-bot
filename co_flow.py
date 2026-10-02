@@ -1,3 +1,4 @@
+import hashlib
 """CO confirmation and durable queue. Enable only with persistent database storage."""
 import hmac
 import json
@@ -56,6 +57,7 @@ class Queue:
         self.path = path
         with self.db() as db:
             db.executescript('''
+              CREATE TABLE IF NOT EXISTS co_event_tombstones (digest TEXT PRIMARY KEY);
               CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY, event TEXT UNIQUE NOT NULL, owner TEXT NOT NULL,
                 chat TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
@@ -143,6 +145,8 @@ class Queue:
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
             if old:
                 return dict(old)
+            if db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',(hashlib.sha256(event.encode()).hexdigest(),)).fetchone():
+                raise DuplicateRequest('Tin nhắn này đã được xử lý và hết thời gian lưu lịch sử; không tạo lại.')
             if require_online:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
@@ -187,7 +191,7 @@ class Queue:
             if require_online and not cancel:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
-            job = db.execute('SELECT * FROM jobs WHERE id=? AND owner=? AND chat=?',(jid,owner,chat)).fetchone()
+            job = db.execute('SELECT * FROM jobs WHERE id=?'+('' if owner==PRIVATE_CO_OWNER else ' AND owner=? AND chat=?'),(jid,) if owner==PRIVATE_CO_OWNER else (jid,owner,chat)).fetchone()
             if not job:
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
             if cancel and job['state'] in {'queued','preview_queued','verified_queued'}:
@@ -204,7 +208,7 @@ class Queue:
                 return 'Xác nhận đã hết hạn. Vui lòng gửi lại form.'
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
-            if not cancel and reply_token:
+            if not cancel and reply_token and job['chat']==chat:
                 db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,time.time()))
                 return None
@@ -216,10 +220,10 @@ class Queue:
             if require_online and not cancel:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE owner=? AND chat=? AND state='draft' AND created<?",
-                       (now,owner,chat,now-300))
-            jobs = db.execute("SELECT id,payload FROM jobs WHERE owner=? AND chat=? AND state='draft' ORDER BY created,id",
-                              (owner,chat)).fetchall()
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' AND created<?",
+                       (now,owner,owner,chat,now-300))
+            jobs = db.execute("SELECT id,payload FROM jobs WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' ORDER BY created,id",
+                              (owner,owner,chat)).fetchall()
             if not jobs:
                 return 'Không có yêu cầu còn hiệu lực đang chờ xác nhận của bạn trong cuộc chat này.'
             state = 'cancelled' if cancel else 'queued'
@@ -232,7 +236,8 @@ class Queue:
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,now))
                 return None
             action = 'Đã hủy' if cancel else 'Đã xác nhận'
-            message = f'{action} {len(jobs)} yêu cầu đang chờ của bạn trong cuộc chat này.'
+            scope='của mọi người' if owner==PRIVATE_CO_OWNER else 'của bạn'
+            message = f'{action} {len(jobs)} yêu cầu đang chờ {scope} trong cuộc chat này.'
             if not cancel:
                 message += ' Máy Mac sẽ xử lý lần lượt và trả kết quả từng yêu cầu.' + self.blocked_notice(db)
             return message
@@ -245,10 +250,10 @@ class Queue:
 
     def cancel_waiting(self, owner, chat):
         with self.db() as db:
-            count = db.execute("SELECT COUNT(*) AS n FROM jobs WHERE owner=? AND chat=? AND state IN ('queued','preview_queued','verified_queued')",
-                               (owner,chat)).fetchone()['n']
-            db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE owner=? AND chat=? AND state IN ('queued','preview_queued','verified_queued')",
-                       (time.time(),owner,chat))
+            count = db.execute("SELECT COUNT(*) AS n FROM jobs WHERE (owner=? OR ?='U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state IN ('queued','preview_queued','verified_queued')",
+                               (owner,owner,chat)).fetchone()['n']
+            db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE (owner=? OR ?='U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state IN ('queued','preview_queued','verified_queued')",
+                       (time.time(),owner,owner,chat))
             message = (f'Đã hủy {count} yêu cầu đã xác nhận nhưng chưa được Mac nhận trong cuộc chat này.'
                        if count else 'Không có yêu cầu đã xác nhận đang chờ Mac của bạn trong cuộc chat này.')
             message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
@@ -501,8 +506,10 @@ def install(app, reply, push, default_users=(), requester_name=None):
         owner=getattr(event.source,'user_id',None)
         chat=getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None) or owner
         if adm:
-            if not owner or owner not in set(default_users):
+            if not owner or (owner!=PRIVATE_CO_OWNER and owner not in set(default_users)):
                 reply(event.reply_token,'Lệnh này chỉ dành cho tài khoản ADM đã được cấp quyền.'); return True
+            if adm in {'HUY CHO ALL','HUY CHỜ ALL'} and owner!=PRIVATE_CO_OWNER:
+                reply(event.reply_token,'Chỉ chủ bot được hủy yêu cầu của người khác.'); return True
             if adm=='LISTADM':
                 reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!ketqua — lấy tối đa 10 CO chưa báo trong nhóm NOTE\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
                 return True
@@ -523,7 +530,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             reply(event.reply_token,'Bot không nhận yêu cầu tạo CO qua tin nhắn riêng của tài khoản này. Vui lòng gửi trong nhóm được phép.'); return True
         if not enabled:
             reply(event.reply_token,'Chức năng tạo CO chưa được cấu hình.'); return True
-        if not owner or (owner not in users and group_id!=MEMBER_CO_GROUP):
+        if not owner or (owner!=PRIVATE_CO_OWNER and owner not in users and group_id!=MEMBER_CO_GROUP):
             reply(event.reply_token,'Tài khoản chưa được cấp quyền tạo CO.'); return True
         try:
             if is_form:
@@ -552,7 +559,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 command,jid=text.split(maxsplit=1)
                 if command.upper()=='XEM':
                     with queue.db() as db:
-                        job=db.execute('SELECT * FROM jobs WHERE id=? AND owner=? AND chat=?',(jid.strip(),owner,chat)).fetchone()
+                        job=db.execute('SELECT * FROM jobs WHERE id=?'+('' if owner==PRIVATE_CO_OWNER else ' AND owner=? AND chat=?'),(jid.strip(),) if owner==PRIVATE_CO_OWNER else (jid.strip(),owner,chat)).fetchone()
                     if not job:
                         message='Không tìm thấy yêu cầu của bạn trong chat này.'
                     elif job['state']=='draft':
