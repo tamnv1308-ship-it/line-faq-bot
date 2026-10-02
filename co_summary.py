@@ -50,37 +50,10 @@ def aggregate(jobs,stores):
     return stats,ranks,names
 
 def render(jobs,stores,start,end,directory):
-    stats,ranks,names=aggregate(jobs,stores)
-    image=Image.new('RGB',(1600,1800),'#f0f4f8');d=ImageDraw.Draw(image)
-    fontpaths=['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf','/System/Library/Fonts/Supplemental/Arial.ttf']
-    fp=next(p for p in fontpaths if Path(p).exists())
-    def text(x,y,t,size=24,color='#162b45'):d.text((x,y),str(t),font=ImageFont.truetype(fp,size),fill=color)
-    def fit(t,width,size=24):
-        f=ImageFont.truetype(fp,size)
-        while d.textlength(t,font=f)>width:t=t[:-2]
-        return t
-    text(48,30,'APPLE BOT | TỔNG KẾT CO',40)
-    text(48,91,start.strftime('%d/%m/%Y')+' — '+(end-timedelta(days=1)).strftime('%d/%m/%Y'),26)
-    text(48,132,'Theo ngày nhận yêu cầu • Giờ Việt Nam • Danh mục kho 09/2026',22)
-    cards=[('Yêu cầu',stats['requests']),('CO thành công',stats['co']),('SL sản phẩm',stats['quantity']),('Dòng lỗi',stats['failed']),('Dòng chờ',stats['pending']),('Chưa rõ kết quả',stats['unknown'])]
-    for n,(label,value) in enumerate(cards):
-        x=48+n*252;d.rounded_rectangle((x,190,x+238,330),14,fill='white');text(x+16,208,label,20);text(x+16,250,value,42,'#00845b')
-    titles={'people':'TOP 5 NGƯỜI YÊU CẦU','source':'TOP 5 KHO XUẤT','destination':'TOP 5 KHO NHẬN','region':'TOP 5 VÙNG XUẤT','province':'TOP 5 TỈNH/THÀNH XUẤT','product':'TOP 5 SẢN PHẨM'}
-    for n,key in enumerate(titles):
-        x=48+(n%2)*770;y=365+(n//2)*425
-        d.rounded_rectangle((x,y,x+738,y+395),14,fill='white');text(x+22,y+20,titles[key],25)
-        text(x+22,y+61,'Xếp theo số dòng CO thành công',18,'#607187')
-        top=sorted(ranks[key].items(),key=lambda v:(-v[1],v[0]))[:5]
-        if not top:text(x+22,y+130,'Chưa có dữ liệu thành công',24)
-        for i,(label,value) in enumerate(top):
-            if key in ('source','destination'):label=label+' - '+stores.get(label,{}).get('name','Chưa có tên kho')
-            elif key in ('people','product'):label=names.get(label,label)
-            yy=y+110+i*52;text(x+22,yy,str(i+1),23);text(x+65,yy,fit(label,570,22),22);text(x+665,yy,value,23,'#00845b')
-    text(48,1660,'Dòng đã hủy/hết hạn: '+str(stats['cancelled'])+' • Xếp hạng bỏ qua dòng lỗi và chưa rõ kết quả.',21)
-    text(48,1700,'Một CO có thể chứa nhiều dòng. Vùng/tỉnh tính theo kho xuất; không cộng cả hai phía.',20)
-    text(48,1740,'Tạo lúc '+datetime.now(TZ).strftime('%H:%M %d/%m/%Y')+' • Lịch sử 7 ngày',20)
-    directory.mkdir(parents=True,exist_ok=True);name=secrets.token_hex(24)+'.png';image.save(directory/name)
-    return name
+    from co_summary_view import draw_dashboard
+    stats,_,_=aggregate(jobs,stores)
+    return draw_dashboard(jobs,stores,start,end,directory,stats,TZ)
+
 
 def cleanup(queue,directory):
     cutoff=period('7ngay')[0].timestamp()
