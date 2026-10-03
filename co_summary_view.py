@@ -38,12 +38,12 @@ def details(jobs, stores, tz):
     for h in range(24):
         codes=hourly[h]-assigned;assigned.update(hourly[h]);hours.append(len(codes))
     ranked={k:sorted([(v,len(codes),quantities[k][v]) for v,codes in table.items()],key=lambda r:(-r[1],r[0]))[:5] for k,table in groups.items()}
-    return dict(ranked=ranked,labels=labels,requests=requests,hours=hours,recent=list(reversed(recent))[:3])
+    return dict(ranked=ranked,labels=labels,requests=requests,hours=hours,recent=list(reversed(recent))[:5])
 
 
 def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     info=details(jobs,stores,tz)
-    W,H=2400,1800;im=Image.new('RGB',(W,H),'#f2f6fa');d=ImageDraw.Draw(im)
+    W,H=2400,1900;im=Image.new('RGB',(W,H),'#f2f6fa');d=ImageDraw.Draw(im)
     navy='#102b50';ink='#122e51';muted='#657b94';green='#07976b';line='#e2eaf2';red='#e55367';amber='#edab34'
     fonts=[('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'),('/System/Library/Fonts/Supplemental/Arial.ttf','/System/Library/Fonts/Supplemental/Arial Bold.ttf')]
     normal,bold=next(pair for pair in fonts if Path(pair[0]).exists());cache={}
@@ -66,13 +66,13 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
         d.rounded_rectangle((34,yy,78,yy+38),6,outline='#a9c3df',width=3)
         d.line((44,yy+28,44,yy+17,55,yy+17,55,yy+10,66,yy+10),fill='#a9c3df',width=3)
     text(56,H-46,'7D',25,'#a9c3df',True,'mm')
-    d.rectangle((112,0,W,94),fill='white');text(150,23,'APPLE BOT',44,navy,True);text(438,29,'|  Tổng kết CO',37,navy)
+    d.rectangle((112,0,W,94),fill='white');text(150,23,'APPLE BOT',44,navy,True);text(438,29,'|  Tổng kết CO • '+str((end-start).days)+' ngày',37,navy)
     text(2348,35,'BÁO CÁO RIÊNG • TÂM 258330',23,muted,False,'ra')
     card(150,111,2200,65)
     dates=start.strftime('%d/%m/%Y')+' — '+(end-timedelta(days=1)).strftime('%d/%m/%Y')
     text(176,129,dates,25,ink,True);text(670,129,'Tất cả vùng  /  Tất cả tỉnh, thành  /  Tất cả kênh',24,muted)
     text(2322,129,'Giờ Việt Nam',24,muted,False,'ra')
-    cards=[('Tổng yêu cầu',stats['requests'],navy),('CO thành công',stats['co'],green),('SL sản phẩm',stats['quantity'],navy),('Dòng lỗi',stats['failed'],red),('Dòng đang chờ',stats['pending'],amber),('Dòng chưa rõ',stats['unknown'],amber)]
+    cards=[('Tổng yêu cầu',stats['requests'],navy),('Mã CO thành công',stats['co'],green),('SL sản phẩm',stats['quantity'],navy),('Dòng lỗi',stats['failed'],red),('Dòng đang chờ',stats['pending'],amber),('Dòng chưa rõ',stats['unknown'],amber)]
     cw=(2200-5*16)//6
     for i,(label,value,color) in enumerate(cards):
         x=150+i*(cw+16);card(x,194,cw,147);d.ellipse((x+20,213,x+58,251),fill='#eaf3f6');text(x+75,218,label,24,muted);text(x+26,261,value,47,color,True)
@@ -126,7 +126,7 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
             text(x+684,yy+3,count,22,green,True,'ra')
             if i<4:d.line((x+20,yy+37,x+w-20,yy+37),fill=line)
     # Latest records, with explicit no-data display and no mock interactions.
-    card(150,1380,2200,265);text(178,1398,'Chi tiết CO gần đây',30,ink,True);text(2320,1407,'3 dòng gần nhất trong kỳ',23,muted,False,'ra')
+    card(150,1380,2200,365);text(178,1398,'Chi tiết CO gần đây',30,ink,True);text(2320,1407,'5 dòng gần nhất trong kỳ',23,muted,False,'ra')
     cols=[(176,170,'Giờ ghi nhận'),(360,280,'Người yêu cầu'),(660,370,'Kho xuất → Kho nhận'),(1050,570,'Sản phẩm'),(1644,90,'SL'),(1754,310,'Mã CO'),(2090,230,'Kết quả')]
     d.rounded_rectangle((170,1451,2330,1494),6,fill='#edf3f8')
     for x,width,label in cols:text(x+5,1460,label,22,muted,True)
@@ -136,7 +136,7 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
         yy=1508+i*43;vals=[row['time'],row['person'],row['source']+' → '+row['destination'],row['product'],row['quantity'],row['co'],row['state']]
         for (x,width,_),value in zip(cols,vals):text(x+5,yy,fit(value,width-15,22),22,green if value=='Thành công' else red if value=='Lỗi' else ink)
         d.line((170,yy+36,2330,yy+36),fill=line)
-    text(150,1664,'Top 5 xếp theo mã CO thành công • SL: số sản phẩm • Vùng/tỉnh theo kho xuất • Kho thiếu danh mục: Chưa phân vùng',23,muted)
-    text(150,1704,'Một CO có thể có nhiều dòng. Biểu đồ dùng giờ ghi nhận yêu cầu, không phải thời điểm MWG tạo xong.',23,muted)
-    text(150,1744,'Danh mục kho 09/2026 • Lịch sử 7 ngày',22,muted);text(2350,1744,'Cập nhật '+datetime.now(tz).strftime('%H:%M %d/%m/%Y'),22,muted,False,'ra')
+    text(150,1764,'Top 5 xếp theo mã CO thành công • SL: số sản phẩm • Vùng/tỉnh theo kho xuất • Kho thiếu danh mục: Chưa phân vùng',23,muted)
+    text(150,1804,'Một CO có thể có nhiều dòng. Biểu đồ dùng giờ ghi nhận yêu cầu, không phải thời điểm MWG tạo xong.',23,muted)
+    text(150,1844,'!tongket: hôm nay • !tongket 7ngay: 7 ngày • Chỉ dữ liệu BOT đã ghi nhận',22,muted);text(2350,1844,'Cập nhật '+datetime.now(tz).strftime('%H:%M %d/%m/%Y'),22,muted,False,'ra')
     directory.mkdir(parents=True,exist_ok=True);name=secrets.token_hex(24)+'.png';im.save(directory/name,optimize=True);return name

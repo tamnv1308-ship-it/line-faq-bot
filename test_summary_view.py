@@ -22,5 +22,13 @@ class DashboardTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    for jobs in ([],[self.job()]):
     name=render(jobs,{'1':{'name':'Tên rất dài '*50,'province':'Tỉnh thử','region':'Vùng thử'}},*period(),Path(tmp))
-    with Image.open(Path(tmp)/name) as image:self.assertEqual(image.size,(2400,1800))
+    with Image.open(Path(tmp)/name) as image:self.assertEqual(image.size,(2400,1900))
     self.assertLess((Path(tmp)/name).stat().st_size,10*1024*1024)
+
+ def test_recent_five_does_not_limit_totals(self):
+  from co_summary import aggregate
+  jobs=[self.job('12CO'+str(i),owner='u'+str(i),hour=i) for i in range(10)]
+  data=details(jobs,{},TZ)
+  self.assertEqual(len(data['recent']),5)
+  self.assertEqual([r['co'] for r in data['recent']],['12CO9','12CO8','12CO7','12CO6','12CO5'])
+  self.assertEqual(aggregate(jobs,{})[0]['co'],10)
