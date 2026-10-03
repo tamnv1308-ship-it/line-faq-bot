@@ -10,6 +10,7 @@ import atexit
 import urllib.request
 from pathlib import Path
 from co_results import items
+from transfer_parser import normalize_status
 
 URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
@@ -153,18 +154,22 @@ def select_brands(page):
     control.press('Escape')
 
 def select_product_status(page, status):
-    labels={'Mới':'1 - Mới','Đã sử dụng':'2 - Đã sử dụng','Mới giảm giá':'8 - Mới (Giảm giá)'}
-    if status not in labels:
+    requested=normalize_status(status)
+    if requested is None:
         raise RuntimeError('Trạng thái yêu cầu không hợp lệ; chưa nhập file.')
     control=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
     control.wait_for(state='visible',timeout=15000)
-    if control.input_value().strip()==labels[status]:
+    if normalize_status(control.input_value())==requested:
         return
     control.press('Alt+ArrowDown')
-    page.get_by_role('option',name=labels[status],exact=True).click()
-    wait_ui(page,lambda: control.input_value().strip()==labels[status],
+    matches=[option for option in page.get_by_role('option').all()
+             if option.is_visible() and normalize_status(option.inner_text())==requested]
+    if len(matches)!=1:
+        raise RuntimeError('Không tìm thấy duy nhất trạng thái '+status+' trên MWG; chưa nhập file.')
+    matches[0].click()
+    wait_ui(page,lambda: normalize_status(control.input_value())==requested,
             'Không xác nhận được trạng thái '+status+'; chưa nhập file.')
-    if control.input_value().strip()!=labels[status]:
+    if normalize_status(control.input_value())!=requested:
         raise RuntimeError('Không xác nhận được trạng thái '+status+'; chưa nhập file.')
 
 def wait_product_status(page, control, timeout=20):
@@ -281,9 +286,8 @@ def process(page, job, prepared_id=None):
                 raise RuntimeError('Tên sản phẩm trên MWG khác bản đã xác nhận; chưa tạo CO.')
         data=job['payload']
         if reuse:
-            status_labels={'Mới':'1 - Mới','Đã sử dụng':'2 - Đã sử dụng','Mới giảm giá':'8 - Mới (Giảm giá)'}
             actual=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True).input_value().strip()
-            if actual!=status_labels[data.get('status','Mới')]:
+            if normalize_status(actual)!=normalize_status(data.get('status','Mới')):
                 raise RuntimeError('Trạng thái sản phẩm đã thay đổi khi chờ xác nhận; chưa tạo CO.')
             control=page.locator('input[role="listbox"]')
             owns=(control.get_attribute('aria-owns') or '').split()

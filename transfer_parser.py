@@ -23,6 +23,14 @@ def fold(text):
                    if unicodedata.category(c) != 'Mn')
 
 
+def normalize_status(value):
+    value=re.sub(r'^\s*\d+\s*[-–]\s*','',value)
+    key=' '.join(re.sub(r'[()]',' ',fold(value)).split())
+    return {'moi':'Mới','da su dung':'Đã sử dụng','moi giam gia':'Mới giảm giá',
+            'trung bay':'Trưng bày','loi moi':'Lỗi (mới)','loi dsd':'Lỗi (ĐSD)',
+            'loi da su dung':'Lỗi (ĐSD)'}.get(key)
+
+
 def parts(text):
     # NFC keeps folded indices aligned with the original Vietnamese text.
     text=unicodedata.normalize('NFC',text).replace('\u00a0',' ')
@@ -55,24 +63,38 @@ def parse_form(text):
     if len(text)>10000:
         raise ValueError('Tin nhắn quá dài; vui lòng gửi mỗi yêu cầu trong một tin nhắn ngắn hơn.')
     values={}; notes=[]
+    def set_status(value):
+        status=normalize_status(value)
+        if status is None:
+            raise ValueError('Trạng thái không hợp lệ: '+value+'. Chưa tạo CO.')
+        if 'status' in values and values['status']!=status:
+            raise ValueError('Có nhiều trạng thái khác nhau; vui lòng chỉ ghi một trạng thái.')
+        values['status']=status
     for key,value in parts(text):
         if key is None:
             normalized=fold(value).lstrip('-*• ').strip()
+            explicit=re.match(r'^trang thai(?: san pham)?\s*[:=]?\s+(.+)$',normalized)
+            if explicit:
+                set_status(explicit.group(1))
+                continue
+            if normalize_status(value):
+                set_status(value)
+                continue
             if (re.match(r'^(?:ql|qlst)\s+cho\s+hang\b',normalized)
                     or re.match(r'^dm\s+xac\s+nhan\b',normalized)):
                 notes.append(value)
             continue
         if key=='note':
+            explicit=re.match(r'^trang thai(?: san pham)?\s*[:=]?\s*(.+)$',fold(value))
+            if explicit or normalize_status(value):
+                set_status(explicit.group(1) if explicit else value)
             if value:
                 notes.append(value)
             continue
         if key=='status':
             if key in values:
                 raise ValueError('Trạng thái xuất hiện nhiều lần.')
-            statuses={'moi':'Mới','da su dung':'Đã sử dụng','moi giam gia':'Mới giảm giá'}
-            if fold(value) not in statuses:
-                raise ValueError('Trạng thái chỉ nhận Mới, Đã sử dụng hoặc Mới giảm giá.')
-            values[key]=statuses[fold(value)]
+            set_status(value)
             continue
         if key in values:
             raise ValueError(f'{LABELS[key]} xuất hiện nhiều lần. Chỉ gửi một yêu cầu trong mỗi tin nhắn.')
