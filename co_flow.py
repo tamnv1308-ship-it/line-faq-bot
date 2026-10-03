@@ -35,9 +35,18 @@ def admin_command(text):
     command=' '.join(text.strip().lstrip('!').upper().split())
     return command if command in ADMIN_CO_COMMANDS else None
 
-def preview_text(job):
+HONORS = [(0,'🐣 MẦM NON BỐC HÀNG'),(50,'📦 BÀN TAY VÀNG LÀNG XIN HÀNG'),
+          (80,'🛵 SHIPPER KHÔNG CẦN BẰNG LÁI'),(120,'🥷 NINJA ĐỘT NHẬP KHO'),
+          (150,'🌪️ ĐI TỚI ĐÂU HẾT HÀNG TỚI ĐÓ'),(200,'👑 ÔNG TRÙM BỐC CẢ KHO'),
+          (250,'🐉 KHO CÒN THỞ LÀ CÒN CHUYỂN')]
+
+def honor(count):
+    return next(label for minimum,label in reversed(HONORS) if count>=minimum)
+
+def preview_text(job, successful_co=0):
     p=json.loads(job['payload']);jid=job['id']
-    blocks=[f"XÁC NHẬN TẠO CO — {jid}"]
+    name=' '.join(str(p.get('requester_name') or 'bạn').split())
+    blocks=[f"🏅 {honor(successful_co)} 🏅\nMời {name} xác nhận nhé! 😂"]
     rows=items(p)
     for n,item in enumerate(rows,1):
         prefix=f"{n}. " if len(rows)>1 else ""
@@ -100,6 +109,28 @@ class Queue:
             raise
         finally:
             db.close()
+
+    def confirmation(self, job):
+        # Same seven Vietnam calendar days as retained report history.
+        from datetime import datetime, timedelta, timezone
+        tz=timezone(timedelta(hours=7))
+        now=datetime.now(tz)
+        start=(now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=6)).timestamp()
+        with self.db() as db:
+            history=db.execute("SELECT payload,result,state FROM jobs WHERE owner=? AND updated>=? AND updated<=? AND state IN ('succeeded','failed','unknown')",
+                               (job['owner'],start,now.timestamp())).fetchall()
+        codes=set()
+        for previous in history:
+            payload=json.loads(previous['payload'])
+            result=previous['result'] or ''
+            try:
+                rows=decode_results(payload,result)
+            except (ValueError,TypeError):
+                if previous['state']=='succeeded' and len(items(payload))==1 and re.fullmatch(r'[0-9A-Z]+CO[0-9]+',result):
+                    codes.add(result)
+            else:
+                codes.update(row['co'] for row in rows if row['co'] and not row['error'])
+        return preview_text(job,len(codes))
 
     def unavailable(self, db):
         row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
@@ -460,7 +491,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 'unknown':'Chưa xác định được kết quả. Cần kiểm tra MWG trước khi tạo lại'}
         # Deliver fresh replies before retrying old pushes (which may be quota-blocked).
         for job in queue.notifications():
-            text=(preview_text(job) if job['state']=='draft' else result_text(job))
+            text=(queue.confirmation(job) if job['state']=='draft' else result_text(job))
             pending=queue.take_preview_reply(job['id'])
             replied=False
             if pending and time.time()-pending['received']<55:
@@ -553,7 +584,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 if job['state']!='draft':
                     reply(event.reply_token,'Yêu cầu này đã được ghi nhận. Không tạo thêm bản trùng.')
                     return True
-                preview=preview_text(job)
+                preview=queue.confirmation(job)
                 reply(event.reply_token,preview)
             else:
                 command,jid=text.split(maxsplit=1)
@@ -563,7 +594,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                     if not job:
                         message='Không tìm thấy yêu cầu của bạn trong chat này.'
                     elif job['state']=='draft':
-                        message=preview_text(job)
+                        message=queue.confirmation(job)
                     else:
                         labels={'preview_queued':'chờ kiểm tra MWG','preview_running':'đang kiểm tra MWG','queued':'chờ tạo','verified_queued':'chờ tạo','running':'đang xử lý','submitting':'đang tạo CO','failed':'không tạo được CO','succeeded':'đã tạo CO','unknown':'chưa rõ kết quả, cần đối soát','cancelled':'đã hủy','expired':'hết hạn'}
                         message=f"Yêu cầu {job['id']} — {labels.get(job['state'],job['state'])}\n{job['result'] or ''}"
