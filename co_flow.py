@@ -35,6 +35,9 @@ def admin_command(text):
     command=' '.join(text.strip().lstrip('!').upper().split())
     return command if command in ADMIN_CO_COMMANDS else None
 
+def is_lookup(text):
+    return bool(re.match(r'^!co(?:\s|$)',text.strip(),re.I))
+
 HONORS = [(0,'🐣 MẦM NON BỐC HÀNG'),(50,'📦 BÀN TAY VÀNG LÀNG XIN HÀNG'),
           (80,'🛵 SHIPPER KHÔNG CẦN BẰNG LÁI'),(120,'🥷 NINJA ĐỘT NHẬP KHO'),
           (150,'🌪️ ĐI TỚI ĐÂU HẾT HÀNG TỚI ĐÓ'),(200,'👑 ÔNG TRÙM BỐC CẢ KHO'),
@@ -109,6 +112,34 @@ class Queue:
             raise
         finally:
             db.close()
+
+    def lookup(self, code, owner):
+        from datetime import datetime, timedelta, timezone
+        tz=timezone(timedelta(hours=7));now=datetime.now(tz)
+        cutoff=(now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=6)).timestamp()
+        with self.db() as db:
+            rows=db.execute("SELECT * FROM jobs WHERE updated>=? AND updated<=? AND (owner=? OR ?=?) ORDER BY updated DESC",
+                            (cutoff,now.timestamp(),owner,owner,PRIVATE_CO_OWNER)).fetchall()
+        found=[];seen=set()
+        for job in rows:
+            payload=json.loads(job['payload'])
+            try:results=decode_results(payload,job['result'] or '')
+            except (ValueError,TypeError):
+                results=[{'co':job['result'],'error':''}] if job['state']=='succeeded' and len(items(payload))==1 and job['result']==code else []
+            for item,result in zip(items(payload),results):
+                if result['co']!=code or result['error']:continue
+                key=(item['source'],item['destination'],item['product'],item['quantity'])
+                if key in seen:continue
+                seen.add(key)
+                found.append(f"Người yêu cầu: {payload.get('requester_name') or 'Chưa có tên'}\n"
+                             f"Kho xuất: {item.get('source_name') or item['source']}\n"
+                             f"Kho nhận: {item.get('destination_name') or item['destination']}\n"
+                             f"Sản phẩm: {item.get('product_name') or 'Chưa có tên sản phẩm'}\n"
+                             f"Số lượng: {item['quantity']}\n"
+                             f"Trạng thái: {item.get('status','Mới')}\n"
+                             f"Kết quả: Đã ghi nhận mã CO thành công\n"
+                             f"Ghi nhận: {datetime.fromtimestamp(job['updated'],tz):%H:%M %d/%m/%Y}")
+        return ('TRA CỨU CO — '+code+'\n\n'+'\n\n'.join(found)) if found else 'Không tìm thấy CO trong lịch sử 7 ngày thuộc quyền xem của bạn.'
 
     def confirmation(self, job):
         # Same seven Vietnam calendar days as retained report history.
@@ -529,6 +560,16 @@ def install(app, reply, push, default_users=(), requester_name=None):
 
     def handle(event):
         text=event.message.text.strip()
+        if is_lookup(text):
+            owner=getattr(event.source,'user_id',None)
+            if not owner:
+                reply(event.reply_token,'Không xác định được người tra cứu.');return True
+            if not queue:
+                reply(event.reply_token,'Chức năng CO chưa được cấu hình.');return True
+            bits=text.upper().split()
+            if len(bits)!=2 or not re.fullmatch(r'[0-9A-Z]+CO[0-9]+',bits[1]):
+                reply(event.reply_token,'Dùng !co <mã CO> để tra cứu lịch sử 7 ngày.');return True
+            reply(event.reply_token,queue.lookup(bits[1],owner));return True
         adm=admin_command(text)
         is_form=is_transfer_message(text)
         is_command=text.upper().startswith(('XACNHAN ','HUY ','SUA ','XEM '))

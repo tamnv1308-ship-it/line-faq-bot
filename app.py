@@ -400,7 +400,7 @@ def handle_message(event):
     log_message_source(event)
     if handle_summary(event):
         return
-    if (co_flow.admin_command(event.message.text) or not event.message.text.strip().startswith(config.BOT_PREFIX)) and handle_co(event):
+    if (co_flow.is_lookup(event.message.text) or co_flow.admin_command(event.message.text) or not event.message.text.strip().startswith(config.BOT_PREFIX)) and handle_co(event):
         return
     user_text = event.message.text.strip()
     user_id = getattr(event.source, "user_id", None)
