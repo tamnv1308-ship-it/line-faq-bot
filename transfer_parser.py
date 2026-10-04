@@ -131,7 +131,7 @@ def parse_request(text):
     groups=[]; lines=[]; seen=set()
     for line in unicodedata.normalize('NFC',text).splitlines():
         keys={key for key,value in parts(line) if key in LABELS}
-        separator=bool(re.fullmatch(r'[\\\s=\-_*]{3,}',line))
+        separator=bool(line.strip()) and bool(re.fullmatch(r'[\\\s=\-_*]{3,}',line))
         if (separator and seen) or (keys & seen):
             if not {'source','destination','product'}<=seen:
                 raise ValueError('Một dòng yêu cầu chưa đủ kho xuất, kho nhận và mã sản phẩm; không tự ghép với yêu cầu kế tiếp.')

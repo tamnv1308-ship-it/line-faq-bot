@@ -75,3 +75,16 @@ class ParserTests(unittest.TestCase):
             parse_form('Kho xuất: 1\nKho nhận: 2\nMSP: 0003\nSL: 1\nNote: '+'a'*501)
 
 if __name__=='__main__':unittest.main()
+
+
+class BlankLineRegressionTests(unittest.TestCase):
+    def test_whitespace_inside_one_request(self):
+        from transfer_parser import parse_request
+        for blank in ('   ', '\t  ', '\u00a0   '):
+            result = parse_request('MSP: 3641273000143\nImei: SLM4N14G356\n' + blank + '\nTrạng thái: đã sử dụng\nKho Xuất: 15078\nKho Nhận: 1537')
+            self.assertEqual((result['source'], result['destination'], result['product'], result['quantity'], result['status']), ('15078', '1537', '3641273000143', 1, 'Đã sử dụng'))
+
+    def test_real_separator_still_rejects_incomplete_record(self):
+        from transfer_parser import parse_request
+        with self.assertRaises(ValueError):
+            parse_request('MSP: 3641273000143\n === \nKho xuất: 15078\nKho nhận: 1537')
