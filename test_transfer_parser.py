@@ -132,4 +132,25 @@ class WarehouseNameTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_request('Kho xuất: 10323\nKho nhận: '+value+'\nMSP:0131491004725')
 
+
+
+
+class InlineProductTests(unittest.TestCase):
+    def test_stock_description_code(self):
+        from transfer_parser import parse_request
+        text='Nhờ anh/chị NH tạo lệnh giúp em\nĐiện thoại iPhone 18 Pro Max 256GB Black\nKD bình thường 0131491005414  \n\nkho xuât: 1093\nkho nhận: 7246\nSL: 1'
+        result=parse_request(text)
+        self.assertEqual((result['product'],result['source'],result['destination'],result['quantity']),('0131491005414','1093','7246',1))
+        self.assertEqual(parse_request(text+'\n'+text.replace('1093','1094'))['items'][1]['source'],'1094')
+
+    def test_inline_ambiguity_and_other_ids(self):
+        from transfer_parser import parse_request
+        for line in ('KD bình thường 0131491005414 0131491005413',
+                     'KD bình thường IMEI 0131491005414',
+                     'Điện thoại mã đơn 0131491005414',
+                     'KD bình thường X0131491005414',
+                     'KD bình thường 01314910054140'):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                parse_request(line+'\nKho xuất: 1093\nKho nhận: 7246')
+
 if __name__=='__main__':unittest.main()

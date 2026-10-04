@@ -41,6 +41,16 @@ def parts(text):
             if re.fullmatch(r'[0-9]{13}', line.strip()):
                 yield 'product', line.strip()
                 continue
+            # Unlabelled product/stock-description lines can end in a product code.
+            # Do not extract arbitrary IDs from notes, mentions or order/IMEI lines.
+            context=fold(line).strip().lstrip('-*• ').strip()
+            if re.match(r'^(?:kd\s+binh\s+thuong|dien\s+thoai|iphone|ipad|macbook|apple)\b',context) and not re.search(r'\b(?:imei|serial|ma\s+don|barcode)\b|@',context):
+                codes=re.findall(r'(?<![\w])([0-9]{13})(?![\w])',line)
+                if len(codes)>1:
+                    raise ValueError('Có nhiều mã sản phẩm trên một dòng; vui lòng tách rõ từng yêu cầu.')
+                if codes:
+                    yield 'product',codes[0]
+                    continue
             if line.strip():
                 yield None,line.strip()
             continue
