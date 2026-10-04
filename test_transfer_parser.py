@@ -74,7 +74,7 @@ class ParserTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'500'):
             parse_form('Kho xuất: 1\nKho nhận: 2\nMSP: 0003\nSL: 1\nNote: '+'a'*501)
 
-if __name__=='__main__':unittest.main()
+
 
 
 class BlankLineRegressionTests(unittest.TestCase):
@@ -88,3 +88,31 @@ class BlankLineRegressionTests(unittest.TestCase):
         from transfer_parser import parse_request
         with self.assertRaises(ValueError):
             parse_request('MSP: 3641273000143\n === \nKho xuất: 15078\nKho nhận: 1537')
+
+
+class BareProductTests(unittest.TestCase):
+    def test_two_returns_with_bare_codes(self):
+        from transfer_parser import parse_request
+        text = ('St trả cọc cho KH ạ\nMã đơn trả cọc:\n10336SO26090063520\n'
+                'Điện thoại iPhone 18 Pro Max 256GB Slive\n0131491005413  \n'
+                'Kho xuất: 114\nKho nhận: 10336\n\n'
+                'Mã đơn trả cọc: YC xuất: 10336SO26090063420\n'
+                'Điện thoại iPhone 18 Pro Max 256GB Burgundy\n0131491005411\n'
+                'Kho xuất: 2184\nKho nhận: 10336')
+        items = parse_request(text)['items']
+        self.assertEqual([(i['product'], i['source'], i['destination'], i['quantity']) for i in items],
+                         [('0131491005413', '114', '10336', 1), ('0131491005411', '2184', '10336', 1)])
+
+    def test_only_standalone_exact_13_digits(self):
+        from transfer_parser import parse_request
+        for text in ('013149100541', '01314910054133', '10336SO26090063520',
+                     'IMEI: 0131491005413', '@User 0131491005413', 'Note: 0131491005413'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_request(text + '\nKho xuất: 114\nKho nhận: 10336')
+
+    def test_ambiguous_partial_records_are_not_merged(self):
+        from transfer_parser import parse_request
+        with self.assertRaises(ValueError):
+            parse_request('0131491005413\n0131491005411\nKho xuất: 114\nKho nhận: 10336')
+
+if __name__=='__main__':unittest.main()

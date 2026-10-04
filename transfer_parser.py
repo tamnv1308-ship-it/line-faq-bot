@@ -37,6 +37,10 @@ def parts(text):
     for line in text.splitlines():
         matches=list(FIELD.finditer(fold(line)))
         if not matches:
+            # A standalone 13-digit product code is also a field, including in batches.
+            if re.fullmatch(r'[0-9]{13}', line.strip()):
+                yield 'product', line.strip()
+                continue
             if line.strip():
                 yield None,line.strip()
             continue
