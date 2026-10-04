@@ -153,4 +153,24 @@ class InlineProductTests(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 parse_request(line+'\nKho xuất: 1093\nKho nhận: 7246')
 
+
+
+
+class WarehouseDashSpacingTests(unittest.TestCase):
+    def test_dash_variations_and_numbered_product(self):
+        from transfer_parser import parse_request
+        for dash in ('-', '–', '—'):
+            for before, after in (('', ''), ('', ' '), (' ', ''), (' ', ' ')):
+                text='1. MSP: 0131491005416\n2. Tên SP: Điện thoại iPhone 18 Pro Max 512GB Xanh.\nKho xuất: 5108 Gia Trấn\nKho nhận: 1149'+before+dash+after+'Nho Quan\nSố lượng: 1\nTrả đơn preoder:01149SO26090552643\nQL cho hàng: @NBI Khánh60616'
+                with self.subTest(dash=dash,before=before,after=after):
+                    row=parse_request(text)
+                    self.assertEqual((row['source'],row['destination'],row['product'],row['quantity']),('5108','1149','0131491005416',1))
+                    self.assertEqual(row['note'],'QL cho hàng: @NBI Khánh60616')
+
+    def test_numeric_range_not_a_warehouse_name(self):
+        from transfer_parser import parse_request
+        for value in ('1149-1150', '1149 - 1150', '1149–1150'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_request('MSP:0131491005416\nKho xuất:5108\nKho nhận:'+value)
+
 if __name__=='__main__':unittest.main()

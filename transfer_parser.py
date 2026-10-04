@@ -117,7 +117,7 @@ def parse_form(text):
         elif key in {'source', 'destination'}:
             # Warehouse names may follow the code without a dash. Require a letter
             # first so numeric lists and slash-separated alternatives stay invalid.
-            match=re.fullmatch(r'([0-9]{1,30})(?:\s+[-–—]\s+[^\n]+|\s+[^\W\d_][^\n]*)?',value)
+            match=re.fullmatch(r'([0-9]{1,30})(?:\s*[-–—]\s*[^\W\d_][^\n]*|\s+[^\W\d_][^\n]*)?',value)
             if match and re.match(r'^(?:hoac|va|or|and)\b',fold(value[match.end(1):].strip())):
                 match=None
         else:
