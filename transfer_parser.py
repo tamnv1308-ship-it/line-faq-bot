@@ -104,6 +104,12 @@ def parse_form(text):
             raise ValueError(f'{LABELS[key]} xuất hiện nhiều lần. Chỉ gửi một yêu cầu trong mỗi tin nhắn.')
         if key=='quantity':
             match=re.fullmatch(r'([0-9]{1,6})(?:\s*(?:cai|chiec|may|san pham|sp))?',fold(value))
+        elif key in {'source', 'destination'}:
+            # Warehouse names may follow the code without a dash. Require a letter
+            # first so numeric lists and slash-separated alternatives stay invalid.
+            match=re.fullmatch(r'([0-9]{1,30})(?:\s+[-–—]\s+[^\n]+|\s+[^\W\d_][^\n]*)?',value)
+            if match and re.match(r'^(?:hoac|va|or|and)\b',fold(value[match.end(1):].strip())):
+                match=None
         else:
             # Optional " - warehouse/product description" is display context, never part of the ID.
             match=re.fullmatch(r'([0-9]{1,30})(?:\s+[-–—]\s+[^\n]+)?',value)

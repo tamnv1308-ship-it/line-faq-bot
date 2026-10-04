@@ -115,4 +115,21 @@ class BareProductTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_request('0131491005413\n0131491005411\nKho xuất: 114\nKho nhận: 10336')
 
+
+
+
+class WarehouseNameTests(unittest.TestCase):
+    def test_names_without_dash(self):
+        from transfer_parser import parse_request
+        result=parse_request('- Mã kho xuất: 10323 - AAR_CTH_NKI - Số 08 Hoà Bình\n- Mã kho nhận: 1759 ĐML Giồng Riềng\n- MSP:0131491004725\n- Trạng thái: mới\n- Số Lượng: 1')
+        self.assertEqual((result['source'],result['destination']),('10323','1759'))
+        result=parse_request('Kho xuất: 328 ĐMM_HNO_HDO - 746 Quang Trung\nKho nhận: 1759 ĐML Giồng Riềng\nMSP:0131491004725')
+        self.assertEqual(result['source'],'328')
+
+    def test_ambiguous_warehouse_numbers_rejected(self):
+        from transfer_parser import parse_request
+        for value in ('1759 1760', '1759/1760', '1759 hoặc 1760', '1759 và 1760'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_request('Kho xuất: 10323\nKho nhận: '+value+'\nMSP:0131491004725')
+
 if __name__=='__main__':unittest.main()
