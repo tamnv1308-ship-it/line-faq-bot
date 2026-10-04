@@ -56,7 +56,8 @@ def render(jobs,stores,start,end,directory):
 
 
 def cleanup(queue,directory):
-    cutoff=period('7ngay')[0].timestamp()
+    image_cutoff=period('7ngay')[0].timestamp()
+    cutoff=(datetime.now(TZ).replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=29)).timestamp()
     with queue.db() as db:
         ids=[r['id'] for r in db.execute("SELECT id FROM jobs WHERE state IN ('succeeded','failed','cancelled','expired') AND created<? AND updated<?",(cutoff,cutoff))]
         for jid in ids:
@@ -66,7 +67,7 @@ def cleanup(queue,directory):
             db.execute('DELETE FROM jobs WHERE id=?',(jid,))
     if directory.exists():
         for p in directory.glob('*.png'):
-            if p.stat().st_mtime<cutoff:p.unlink()
+            if p.stat().st_mtime<image_cutoff:p.unlink()
 
 def install(app,reply,reply_image,scheduler,base_url):
     from flask import send_from_directory,abort

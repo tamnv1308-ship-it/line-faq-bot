@@ -116,7 +116,7 @@ class Queue:
     def lookup(self, code, owner):
         from datetime import datetime, timedelta, timezone
         tz=timezone(timedelta(hours=7));now=datetime.now(tz)
-        cutoff=(now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=6)).timestamp()
+        cutoff=(now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=29)).timestamp()
         with self.db() as db:
             rows=db.execute("SELECT * FROM jobs WHERE updated>=? AND updated<=? AND (owner=? OR ?=?) ORDER BY updated DESC",
                             (cutoff,now.timestamp(),owner,owner,PRIVATE_CO_OWNER)).fetchall()
@@ -139,7 +139,7 @@ class Queue:
                              f"Trạng thái: {item.get('status','Mới')}\n"
                              f"Kết quả: Đã ghi nhận mã CO thành công\n"
                              f"Ghi nhận: {datetime.fromtimestamp(job['updated'],tz):%H:%M %d/%m/%Y}")
-        return ('TRA CỨU CO — '+code+'\n\n'+'\n\n'.join(found)) if found else 'Không tìm thấy CO trong lịch sử 7 ngày thuộc quyền xem của bạn.'
+        return ('TRA CỨU CO — '+code+'\n\n'+'\n\n'.join(found)) if found else 'Không tìm thấy CO trong lịch sử 30 ngày thuộc quyền xem của bạn.'
 
     def confirmation(self, job):
         # Same seven Vietnam calendar days as retained report history.
@@ -568,7 +568,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 reply(event.reply_token,'Chức năng CO chưa được cấu hình.');return True
             bits=text.upper().split()
             if len(bits)!=2 or not re.fullmatch(r'[0-9A-Z]+CO[0-9]+',bits[1]):
-                reply(event.reply_token,'Dùng !co <mã CO> để tra cứu lịch sử 7 ngày.');return True
+                reply(event.reply_token,'Dùng !co <mã CO> để tra cứu lịch sử 30 ngày.');return True
             reply(event.reply_token,queue.lookup(bits[1],owner));return True
         adm=admin_command(text)
         is_form=is_transfer_message(text)

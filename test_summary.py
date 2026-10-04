@@ -24,14 +24,14 @@ class SummaryTests(unittest.TestCase):
   stats,ranks,names=aggregate([j],{'1':{'region':'R','province':'P'}})
   self.assertEqual((stats['co'],stats['quantity'],stats['unknown']),(1,2,1));self.assertEqual(ranks['region']['R'],1)
  def test_cleanup_keeps_unknown(self):
-  a=self.job();b=self.job('b');old=time.time()-10*86400
+  a=self.job();b=self.job('b');old=time.time()-31*86400
   with self.q.db() as d:
    d.execute("UPDATE jobs SET created=?,updated=?,notified=1,state='failed'",(old,old));d.execute("UPDATE jobs SET state='unknown' WHERE id=?",(b['id'],))
   cleanup(self.q,Path(self.tmp.name)/'imgs')
   with self.q.db() as d:self.assertEqual([r['id'] for r in d.execute('SELECT id FROM jobs')],[b['id']])
  def test_pruned_event_cannot_replay(self):
   from co_flow import DuplicateRequest
-  self.job();old=time.time()-10*86400
+  self.job();old=time.time()-31*86400
   with self.q.db() as d:d.execute("UPDATE jobs SET created=?,updated=?,state='cancelled'",(old,old))
   cleanup(self.q,Path(self.tmp.name)/'imgs')
   with self.assertRaises(DuplicateRequest):self.job()
@@ -55,3 +55,16 @@ class SummaryTests(unittest.TestCase):
    route=routes['/co-summary-images/<filename>']
    self.assertEqual(route(name),200)
    with self.assertRaises(ValueError):route('not-valid.png')
+
+class RetentionThirtyTests(unittest.TestCase):
+ def test_history_thirty_images_seven(self):
+  import os
+  from co_flow import Queue
+  with tempfile.TemporaryDirectory() as tmp:
+   q=Queue(tmp+'/q.db');p=dict(source='1',destination='2',product='003',quantity=1,note='')
+   j=q.draft('retain','user','chat',p)
+   with q.db() as db:db.execute("UPDATE jobs SET state='succeeded',created=?,updated=?",(time.time()-20*86400,time.time()-20*86400))
+   folder=Path(tmp)/'images';folder.mkdir();image=folder/'old.png';image.write_bytes(b'x');os.utime(image,(time.time()-8*86400,)*2)
+   cleanup(q,folder)
+   with q.db() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0],1)
+   self.assertFalse(image.exists())
