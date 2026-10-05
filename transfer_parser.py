@@ -61,6 +61,10 @@ def parts(text):
             end=matches[i+1].start() if i+1<len(matches) else len(line)
             key=LOOKUP[re.sub(r'[ \t]+',' ',match.group(1).lower())]
             value=line[match.end():end].strip()
+            # Short 'SP 1' is a quantity; 13-digit SP remains a product code.
+            if match.group(1).lower() == 'sp' and re.fullmatch(r'[1-9][0-9]{0,5}',value):
+                yield 'quantity',value
+                continue
             # SP also labels a product name in pasted requests. Only numeric SP is an ID.
             if re.sub(r'[ \t]+',' ',match.group(1).lower()) in {'sp','san pham'} and not re.match(r'^[0-9]',value):
                 yield None,value

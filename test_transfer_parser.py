@@ -196,4 +196,24 @@ class RequestedAliasTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_request('chuyen: 5108/2184\nnhap: 1149\ncode san pham: 0131491005416')
 
+
+
+
+class ShortSpQuantityTests(unittest.TestCase):
+    def test_user_short_sp_quantity(self):
+        from transfer_parser import parse_request
+        text='- 18prm 256gb : đen\n- Kho chuyển: 8902\n- Kho nhận: 12563\n  Sp 1\n- Msp: 0131491005414\nQlst cho hàng: A Trung-13960'
+        row=parse_request(text)
+        self.assertEqual((row['source'],row['destination'],row['product'],row['quantity']),('8902','12563','0131491005414',1))
+        self.assertEqual(row['note'],'Qlst cho hàng: A Trung-13960')
+        self.assertEqual(parse_request(text.replace('Sp 1','SP: 2'))['quantity'],2)
+        self.assertEqual(len(parse_request(text+'\n'+text.replace('8902','8903'))['items']),2)
+
+    def test_sp_product_and_missing_product(self):
+        from transfer_parser import parse_request
+        row=parse_request('Kho xuất:8902\nKho nhận:12563\nSP:0131491005414')
+        self.assertEqual(row['product'],'0131491005414')
+        with self.assertRaises(ValueError):
+            parse_request('Kho xuất:8902\nKho nhận:12563\nSP 1')
+
 if __name__=='__main__':unittest.main()
