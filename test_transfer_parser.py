@@ -173,4 +173,27 @@ class WarehouseDashSpacingTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_request('MSP:0131491005416\nKho xuất:5108\nKho nhận:'+value)
 
+
+
+
+class RequestedAliasTests(unittest.TestCase):
+    def test_all_requested_labels(self):
+        from transfer_parser import parse_request
+        for source in ('Kho chuyển','kho chuyen','chuyen','chuyển'):
+            for destination in ('Kho nhập','kho nhap','nhap','nhập'):
+                for product in ('Mã code','ma code','code','msp','ma san pham','ma SP','code san pham','Code Sản phẩm'):
+                    with self.subTest(source=source,destination=destination,product=product):
+                        row=parse_request(f'{source}: 5108\n{destination}: 1149\n{product}: 0131491005416')
+                        self.assertEqual((row['source'],row['destination'],row['product']),('5108','1149','0131491005416'))
+
+    def test_alias_batch_and_conversation(self):
+        from transfer_parser import parse_request,is_transfer_message
+        batch=parse_request('chuyển 5108\nnhập 1149\nCode Sản phẩm: 0131491005416\nchuyen: 2184\nnhap: 10336\nma SP: 0131491005411')
+        self.assertEqual(len(batch['items']),2)
+        self.assertEqual(batch['items'][1]['source'],'2184')
+        self.assertFalse(is_transfer_message('Nhờ anh chuyển hàng và nhập giúp em'))
+        self.assertFalse(is_transfer_message('chuyển hàng giúp em'))
+        with self.assertRaises(ValueError):
+            parse_request('chuyen: 5108/2184\nnhap: 1149\ncode san pham: 0131491005416')
+
 if __name__=='__main__':unittest.main()
