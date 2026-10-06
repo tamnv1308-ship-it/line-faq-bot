@@ -17,7 +17,7 @@ class ReplyTests(unittest.TestCase):
         app=types.SimpleNamespace(post=lambda route:lambda f:f,get=lambda route:lambda f:f,logger=types.SimpleNamespace(warning=lambda *args:None))
         flask=types.SimpleNamespace(request=None,jsonify=None,abort=None)
         with patch.dict('sys.modules',{'flask':flask}):
-            self.handle,self.notify=install(app,self.reply,self.push)
+            self.handle,self.notify=install(app,self.reply,self.push,requester_name=lambda event:"Người gửi thử nghiệm")
         self.q=Queue(self.path)
         self.q.heartbeat()
     def reply(self,token,text):

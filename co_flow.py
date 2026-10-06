@@ -20,6 +20,24 @@ PRIVATE_CO_OWNER = 'U60751d1a57eb4707a3dff9c06f3240a4'
 
 NOTE_GROUP = 'C4f38e1a465a6dd1b0a3cd5c175f84c62'
 
+def add_requester_note(payload, requester_name):
+    """Finalize notes once at intake, before preview and either worker path."""
+    name=' '.join(str(requester_name or '').split())
+    if not name or name=='Không lấy được tên' or re.fullmatch(r'U[0-9a-fA-F]{32}',name):
+        raise ValueError('Không lấy được tên hiển thị LINE của người gửi. Chưa nhận yêu cầu; vui lòng thử lại sau.')
+    suffix='Mọi thắc mắc liên hệ '+name
+    finalized=[]
+    for number,item in enumerate(items(payload),1):
+        original=item.get('note','')
+        note=original if original==suffix or original.endswith(' '+suffix) or original.endswith('\n'+suffix) else original+(' ' if original else '')+suffix
+        if len(note)>500:
+            raise ValueError(f'Ghi chú dòng {number} gồm tên người yêu cầu vượt 500 ký tự ({len(note)} ký tự). Rút gọn Note và gửi lại; bot không tự cắt bỏ.')
+        finalized.append((item,note))
+    for item,note in finalized:
+        item['note']=note
+    payload['requester_name']=name
+    return payload
+
 class DuplicateRequest(ValueError):
     pass
 
@@ -608,9 +626,10 @@ def install(app, reply, push, default_users=(), requester_name=None):
             if is_form:
                 payload=parse_request(text)
                 try:
-                    payload['requester_name']=requester_name(event) if requester_name else owner
+                    name=requester_name(event) if requester_name else None
                 except Exception:
-                    payload['requester_name']=owner
+                    name=None
+                add_requester_note(payload,name)
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id
