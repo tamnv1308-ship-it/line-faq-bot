@@ -12,6 +12,7 @@ from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message
 from destination_policy import check_destinations, BlockedDestination
+from co_regions import region_label
 from co_results import items, preview_names, decode_results, result_text, note_group_text, preview_details
 
 MEMBER_CO_GROUP = 'Cb71979a134ed1fd580e3e9d133f1d29f'
@@ -70,9 +71,14 @@ def preview_text(job, successful_co=0):
     name=' '.join(str(p.get('requester_name') or 'bạn').split())
     blocks=[f"🏅 {honor(successful_co)} 🏅\nMời {name} xác nhận nhé! 😂"]
     rows=items(p)
+    regions=[region_label(item) for item in rows]
+    if len(rows)>1:
+        counts={kind:sum(state==kind for state,label in regions) for kind in ('same','different','unknown')}
+        blocks.append(f"📦 {len(rows)} lệnh · {counts['same']} cùng vùng · ⚠️ {counts['different']} khác vùng · ❓ {counts['unknown']} chưa rõ")
     for n,item in enumerate(rows,1):
         prefix=f"{n}. " if len(rows)>1 else ""
-        blocks.append(f"{prefix}Kho xuất: {item.get('source_name',item['source'])}\n"
+        blocks.append(f"{prefix}{regions[n-1][1]}\n\n"
+                      f"Kho xuất: {item.get('source_name',item['source'])}\n"
                       f"Kho nhận: {item.get('destination_name',item['destination'])}\n\n"
                       f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
                       f"Số lượng: {item['quantity']}\n"

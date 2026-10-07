@@ -40,45 +40,8 @@ ADMIN_USER_IDS = [
     "U810ef43dc32d6cb1c3bb332f7aabad4c",
     "Ua7faef12dfde3213c23d01c34dfede91",
     "Uf557568065b6debd6aa5c1ced009cbd6",
-    "U1e9e6bd900a9351cf44678b56c85f800",
-
 ]
 
-REMINDER_SCHEDULES = [
-    {
-        "id": "morning",
-        "hour": 8,
-        "minute": 0,
-        "reminders": [
-            {
-                "group_id": GROUPS["bot"],
-                "message": (
-                    "☀️ Chào buổi sáng mọi người, hẹ hẹ hẹ.\n"
-                    "Chúc cả group một ngày chạy deadline té địt nhớ !!!."
-                ),
-            },
-        ],
-    },
-    {
-        "id": "night",
-        "hour": 22,
-        "minute": 0,
-        "reminders": [
-            {
-                "group_id": GROUPS["bot"],
-                "message": "🌙 Con đỗn Boa, thoát nhóm ra vào lại nhá nhanh lên nàoo!.",
-            },
-        ],
-    },
-]
-REPORT_PUBLIC_BASE_URL = os.getenv(
-    "REPORT_PUBLIC_BASE_URL",
-    os.getenv("RENDER_EXTERNAL_URL", ""),
-).rstrip("/")
-
-FAQ_SHEET_NAME = "FAQ"
-REPORT_SHEET_NAME = "DATA"
-
-# Đã tắt gửi ảnh report tự động theo khung giờ.
-# Vẫn có thể gửi report thủ công bằng lệnh !testreport.
+# Automatic reminder/report broadcasts disabled at owner request.
+REMINDER_SCHEDULES = []
 REPORT_SCHEDULES = []
