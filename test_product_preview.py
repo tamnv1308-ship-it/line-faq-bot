@@ -9,7 +9,7 @@ class PreviewTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.q=Queue(str(Path(self.tmp.name)/'q.db'))
-        self.p=dict(source='123',destination='456',product='00123',quantity=1,note='',status='Mới')
+        self.p=dict(source='123',destination='999999',product='00123',quantity=1,note='',status='Mới')
     def draft(self):
         return self.q.draft('evt','owner','chat',self.p,check_product=True)
     def test_preview_cannot_create_before_confirmation(self):

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message
+from destination_policy import check_destinations, BlockedDestination
 from co_results import items, preview_names, decode_results, result_text, note_group_text, preview_details
 
 MEMBER_CO_GROUP = 'Cb71979a134ed1fd580e3e9d133f1d29f'
@@ -220,6 +221,7 @@ class Queue:
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
     def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False):
+        check_destinations(payload)
         now = time.time()
         with self.db() as db:
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
@@ -625,6 +627,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
         try:
             if is_form:
                 payload=parse_request(text)
+                check_destinations(payload)
                 try:
                     name=requester_name(event) if requester_name else None
                 except Exception:
@@ -669,6 +672,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                     message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True)
                     if message is not None:
                         reply(event.reply_token,message)
+        except BlockedDestination as error:
+            reply(event.reply_token,str(error))
         except DuplicateRequest as error:
             reply(event.reply_token,str(error))
         except BotUnavailable as error:

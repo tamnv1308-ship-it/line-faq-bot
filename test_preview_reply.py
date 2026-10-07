@@ -25,7 +25,7 @@ class ReplyTests(unittest.TestCase):
     def push(self,*args):
         self.pushes.append(args);return True
     def event(self):
-        return types.SimpleNamespace(reply_token='test-token',webhook_event_id='evt',source=types.SimpleNamespace(user_id='owner',group_id='owner'),message=types.SimpleNamespace(id='msg',text='Kho xuất: 123\nKho nhận: 456\nMã sản phẩm: 00123\nSố lượng: 1\nNote:'))
+        return types.SimpleNamespace(reply_token='test-token',webhook_event_id='evt',source=types.SimpleNamespace(user_id='owner',group_id='owner'),message=types.SimpleNamespace(id='msg',text='Kho xuất: 123\nKho nhận: 999999\nMã sản phẩm: 00123\nSố lượng: 1\nNote:'))
     def test_immediate_receipt_then_preview_push_without_creation(self):
         with patch.dict(os.environ,{'CO_ACK_RECEIPT':'1'}):
             self.handle(self.event());self.handle(self.event())
