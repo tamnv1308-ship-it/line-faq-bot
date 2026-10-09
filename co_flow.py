@@ -154,8 +154,8 @@ class Queue:
         tz=timezone(timedelta(hours=7));now=datetime.now(tz)
         cutoff=(now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=29)).timestamp()
         with self.db() as db:
-            rows=db.execute("SELECT * FROM jobs WHERE updated>=? AND updated<=? AND (owner=? OR ?=?) ORDER BY updated DESC",
-                            (cutoff,now.timestamp(),owner,owner,PRIVATE_CO_OWNER)).fetchall()
+            rows=db.execute("SELECT * FROM jobs WHERE updated>=? AND updated<=? ORDER BY updated DESC",
+                            (cutoff,now.timestamp())).fetchall()
         found=[];seen=set()
         for job in rows:
             payload=json.loads(job['payload'])
@@ -175,7 +175,7 @@ class Queue:
                              f"Trạng thái: {item.get('status','Mới')}\n"
                              f"Kết quả: Đã ghi nhận mã CO thành công\n"
                              f"Ghi nhận: {datetime.fromtimestamp(job['updated'],tz):%H:%M %d/%m/%Y}")
-        return ('TRA CỨU CO — '+code+'\n\n'+'\n\n'.join(found)) if found else 'Không tìm thấy CO trong lịch sử 30 ngày thuộc quyền xem của bạn.'
+        return ('TRA CỨU CO — '+code+'\n\n'+'\n\n'.join(found)) if found else 'Không tìm thấy CO trong lịch sử 30 ngày.'
 
     def confirmation(self, job):
         # Same seven Vietnam calendar days as retained report history.

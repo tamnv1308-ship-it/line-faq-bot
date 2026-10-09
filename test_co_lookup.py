@@ -7,11 +7,10 @@ class LookupTests(AdminTests):
   j=self.q.draft('lookup','operator','group',p)
   with self.q.db() as db:db.execute('UPDATE jobs SET state=?,result=? WHERE id=?',(state,result,j['id']))
   return j
- def test_owner_and_other_admin(self):
+ def test_everyone_can_lookup(self):
   self.seed()
-  for user in ['operator',PRIVATE_CO_OWNER]:
+  for user in ['operator',PRIVATE_CO_OWNER,'admin','ordinary_member']:
    self.handle(self.event('!co 12co123',user));self.assertIn('iPhone',self.replies[-1]);self.assertIn('1 - Kho A',self.replies[-1])
-  self.handle(self.event('!co 12CO123','admin'));self.assertIn('Không tìm thấy',self.replies[-1])
  def test_outside_retention(self):
   self.seed()
   with self.q.db() as db:db.execute('UPDATE jobs SET updated=?',(time.time()-31*86400,))
