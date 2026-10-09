@@ -2,7 +2,7 @@ import unittest,tempfile,json,time
 from pathlib import Path
 from datetime import datetime
 from co_flow import Queue,PRIVATE_CO_OWNER
-from co_summary import period,aggregate,cleanup
+from co_summary import period,aggregate,cleanup,TZ
 class SummaryTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.q=Queue(self.tmp.name+'/q.db');self.p=dict(source='1',destination='2',product='0131491005418',quantity=2,note='')
@@ -17,7 +17,20 @@ class SummaryTests(unittest.TestCase):
   a=self.job();self.q.confirm(a['id'],'other','group');self.q.cancel_waiting('admin','group');self.q.cancel_waiting(PRIVATE_CO_OWNER,'group');self.assertIsNone(self.q.claim())
  def test_period(self):
   now=datetime(2026,10,2);self.assertEqual(period('7ngay',now)[0].strftime('%d/%m'),'26/09')
-  with self.assertRaises(ValueError):period('25/09/2026',now)
+  with self.assertRaises(ValueError):period('02/09/2026',now)
+ def test_recent_thirty_calendar_days(self):
+  from datetime import timezone,timedelta
+  now=datetime(2026,10,9,23,59,tzinfo=TZ)
+  for arg in ('30ngay','30','30 ngày',' 30NGAY '):
+   start,end=period(arg,now)
+   self.assertEqual(start.isoformat(),'2026-09-10T00:00:00+07:00')
+   self.assertEqual(end.isoformat(),'2026-10-10T00:00:00+07:00')
+   self.assertEqual((end-start).days,30)
+  self.assertEqual(period('10/09/2026',now)[0].day,10)
+  for arg in ('09/09/2026','10/10/2026'):
+   with self.assertRaises(ValueError):period(arg,now)
+  utc=datetime(2026,10,9,18,tzinfo=timezone.utc)
+  self.assertEqual(period('30ngay',utc)[1].isoformat(),'2026-10-11T00:00:00+07:00')
  def test_partial_and_quantity(self):
   p={'items':[self.p,self.p], 'requester_name':'Name'}
   j=dict(owner='u',payload=json.dumps(p),state='unknown',result=json.dumps([dict(co='12CO123',error=''),dict(co='',error='Unknown')]))

@@ -1,4 +1,4 @@
-"""Owner-only seven calendar day CO reports; never drives queue state."""
+"""Owner-only CO reports over retained Vietnam calendar days; never drives queue state."""
 import json, os, re, secrets, time, zlib, base64, hashlib
 from collections import Counter
 from datetime import datetime, timedelta
@@ -11,13 +11,18 @@ OWNER='U60751d1a57eb4707a3dff9c06f3240a4'
 TERMINAL=('succeeded','failed','cancelled','expired')
 
 def period(arg='',now=None):
-    today=(now or datetime.now(TZ)).date(); first=today-timedelta(days=6)
-    if arg.lower()=='7ngay':start,end=first,today
-    elif not arg:start=end=today
+    clock=now or datetime.now(TZ)
+    if clock.tzinfo is not None:clock=clock.astimezone(TZ)
+    today=clock.date(); first=today-timedelta(days=29)
+    token=''.join(arg.strip().lower().split()).replace('ngày','ngay')
+    if token in ('7','7ngay','30','30ngay'):
+        days=30 if token.startswith('30') else 7
+        start,end=today-timedelta(days=days-1),today
+    elif not token:start=end=today
     else:
-        try:start=end=datetime.strptime(arg,'%d/%m/%Y').date()
-        except ValueError:raise ValueError('Dùng !tongket, !tongket DD/MM/YYYY hoặc !tongket 7ngay.')
-        if not first<=start<=today:raise ValueError('Chỉ xem được hôm nay và 6 ngày trước theo giờ Việt Nam.')
+        try:start=end=datetime.strptime(arg.strip(),'%d/%m/%Y').date()
+        except ValueError:raise ValueError('Dùng !tongket, !tongket 7ngay, !tongket 30ngay hoặc !tongket DD/MM/YYYY.')
+        if not first<=start<=today:raise ValueError('Chỉ xem được 30 ngày gần nhất theo giờ Việt Nam (gồm hôm nay).')
     return datetime.combine(start,datetime.min.time(),TZ),datetime.combine(end+timedelta(days=1),datetime.min.time(),TZ)
 
 def aggregate(jobs,stores):

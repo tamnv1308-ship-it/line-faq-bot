@@ -138,5 +138,5 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
         d.line((170,yy+36,2330,yy+36),fill=line)
     text(150,1764,'Top 5 xếp theo mã CO thành công • SL: số sản phẩm • Vùng/tỉnh theo kho xuất • Kho thiếu danh mục: Chưa phân vùng',23,muted)
     text(150,1804,'Một CO có thể có nhiều dòng. Biểu đồ dùng giờ ghi nhận yêu cầu, không phải thời điểm MWG tạo xong.',23,muted)
-    text(150,1844,'!tongket: hôm nay • !tongket 7ngay: 7 ngày • Chỉ dữ liệu BOT đã ghi nhận',22,muted);text(2350,1844,'Cập nhật '+datetime.now(tz).strftime('%H:%M %d/%m/%Y'),22,muted,False,'ra')
+    text(150,1844,'!tongket: hôm nay • !tongket 7ngay / 30ngay • Chỉ dữ liệu BOT đã ghi nhận',22,muted);text(2350,1844,'Cập nhật '+datetime.now(tz).strftime('%H:%M %d/%m/%Y'),22,muted,False,'ra')
     directory.mkdir(parents=True,exist_ok=True);name=secrets.token_hex(24)+'.png';im.save(directory/name,optimize=True);return name
