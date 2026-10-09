@@ -41,6 +41,28 @@ def details(jobs, stores, tz):
     return dict(ranked=ranked,labels=labels,requests=requests,hours=hours,recent=list(reversed(recent))[:5])
 
 
+def product_lines(name, measure, width):
+    """Full product label for Top 5 only; never truncate storage or color."""
+    name=re.sub(r'^điện\s+thoại\s+', '', str(name).strip(), flags=re.I)
+    # Prefer model on the first line, capacity and color on the next.
+    parts=re.split(r'\s+(?=\d+(?:[.,]\d+)?\s*(?:GB|TB)\b)',name,maxsplit=1,flags=re.I)
+    lines=[]
+    for part in parts:
+        line=''
+        for word in part.split():
+            candidate=(line+' '+word).strip()
+            if line and measure(candidate)>width:
+                lines.append(line);line=''
+            if measure(word)>width:
+                for char in word:
+                    if line and measure(line+char)>width:
+                        lines.append(line);line=''
+                    line+=char
+            else:line=(line+' '+word).strip()
+        if line:lines.append(line)
+    return lines or ['Chưa có tên sản phẩm']
+
+
 def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     info=details(jobs,stores,tz)
     W,H=2400,1900;im=Image.new('RGB',(W,H),'#f2f6fa');d=ImageDraw.Draw(im)
@@ -60,12 +82,18 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     def card(x,y,w,h):d.rounded_rectangle((x,y,x+w,y+h),radius=14,fill='white',outline=line,width=2)
     def badge(x,y,n):
         color='#ffe3a2' if n==1 else '#e9f0f7';d.ellipse((x,y,x+32,y+32),fill=color);text(x+16,y+16,n,20,ink,True,'mm')
+    product_layout={key:product_lines(info['labels'].get(('product',key),key),lambda value:d.textlength(value,font=font(22)),390)
+                    for key,_,_ in info['ranked']['product']}
+    product_heights={key:max(41,len(lines)*28+10) for key,lines in product_layout.items()}
+    extra=max(0,111+sum(product_heights.values())+10-328)
+    if extra:
+        H+=extra;im=Image.new('RGB',(W,H),'#f2f6fa');d=ImageDraw.Draw(im)
     # A compact brand rail, not simulated clickable navigation.
     d.rectangle((0,0,112,H),fill=navy);text(56,53,'CO',36,'white',True,'mm')
     for yy in (175,260,345):
         d.rounded_rectangle((34,yy,78,yy+38),6,outline='#a9c3df',width=3)
         d.line((44,yy+28,44,yy+17,55,yy+17,55,yy+10,66,yy+10),fill='#a9c3df',width=3)
-    text(56,H-46,'7D',25,'#a9c3df',True,'mm')
+    text(56,H-46,str((end-start).days)+'D',25,'#a9c3df',True,'mm')
     d.rectangle((112,0,W,94),fill='white');text(150,23,'APPLE BOT',44,navy,True);text(438,29,'|  Tổng kết CO • '+str((end-start).days)+' ngày',37,navy)
     text(2348,35,'BÁO CÁO RIÊNG • TÂM 258330',23,muted,False,'ra')
     card(150,111,2200,65)
@@ -102,7 +130,7 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     # Six compact Top 5 panels in a three-column grid.
     titles={'people':'TOP 5 người yêu cầu','source':'TOP 5 kho xuất','destination':'TOP 5 kho nhận','region':'TOP 5 vùng xuất','province':'TOP 5 tỉnh/thành xuất','product':'TOP 5 sản phẩm'}
     for n,(kind,title) in enumerate(titles.items()):
-        x=150+(n%3)*740;y=687+(n//3)*346;w=720;card(x,y,w,328);text(x+22,y+18,title,28,ink,True)
+        x=150+(n%3)*740;y=687+(n//3)*346;w=720;card(x,y,w,328+(extra if n//3 else 0));text(x+22,y+18,title,28,ink,True)
         d.rounded_rectangle((x+16,y+63,x+w-16,y+102),7,fill='#edf3f8')
         text(x+28,y+71,'#',20,muted,True)
         is_geo=kind in ('region','province');namewidth=420 if is_geo else 390
@@ -114,29 +142,33 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
         rows=info['ranked'][kind]
         if not rows:text(x+28,y+159,'Chưa có dữ liệu thành công',25,muted)
         for i,(key,count,qty) in enumerate(rows):
-            yy=y+111+i*41;badge(x+25,yy,i+1)
+            rowheight=product_heights[key] if kind=='product' else 41
+            yy=y+111+(sum(product_heights[r[0]] for r in rows[:i]) if kind=='product' else i*41);badge(x+25,yy,i+1)
             label=info['labels'].get((kind,key),key)
             if kind in ('source','destination'):label=key+' · '+label
             if kind=='region':label=label.removeprefix('Vùng ')
             if kind=='province':label=label.removeprefix('Thành phố ').removeprefix('Tỉnh ')
-            text(x+70,yy+3,fit(label,namewidth,22),22)
+            if kind=='product':
+                for line_index,product_line in enumerate(product_layout[key]):
+                    text(x+70,yy+3+line_index*28,product_line,22)
+            else:text(x+70,yy+3,fit(label,namewidth,22),22)
             if is_geo:
                 barx=x+510;d.rounded_rectangle((barx,yy+10,barx+114,yy+25),4,fill='#edf3f8');d.rounded_rectangle((barx,yy+10,barx+max(2,114*count/rows[0][1]),yy+25),4,fill=green)
             else:text(x+575,yy+3,info['requests'][key] if kind=='people' else qty,22,ink,False,'ra')
             text(x+684,yy+3,count,22,green,True,'ra')
-            if i<4:d.line((x+20,yy+37,x+w-20,yy+37),fill=line)
+            if i<4:d.line((x+20,yy+rowheight-4,x+w-20,yy+rowheight-4),fill=line)
     # Latest records, with explicit no-data display and no mock interactions.
-    card(150,1380,2200,365);text(178,1398,'Chi tiết CO gần đây',30,ink,True);text(2320,1407,'5 dòng gần nhất trong kỳ',23,muted,False,'ra')
+    card(150,1380+extra,2200,365);text(178,1398+extra,'Chi tiết CO gần đây',30,ink,True);text(2320,1407+extra,'5 dòng gần nhất trong kỳ',23,muted,False,'ra')
     cols=[(176,170,'Giờ ghi nhận'),(360,280,'Người yêu cầu'),(660,370,'Kho xuất → Kho nhận'),(1050,570,'Sản phẩm'),(1644,90,'SL'),(1754,310,'Mã CO'),(2090,230,'Kết quả')]
-    d.rounded_rectangle((170,1451,2330,1494),6,fill='#edf3f8')
-    for x,width,label in cols:text(x+5,1460,label,22,muted,True)
+    d.rounded_rectangle((170,1451+extra,2330,1494+extra),6,fill='#edf3f8')
+    for x,width,label in cols:text(x+5,1460+extra,label,22,muted,True)
     recent=info['recent']
-    if not recent:text(180,1531,'Chưa có yêu cầu trong khoảng ngày này.',27,muted)
+    if not recent:text(180,1531+extra,'Chưa có yêu cầu trong khoảng ngày này.',27,muted)
     for i,row in enumerate(recent):
-        yy=1508+i*43;vals=[row['time'],row['person'],row['source']+' → '+row['destination'],row['product'],row['quantity'],row['co'],row['state']]
+        yy=1508+extra+i*43;vals=[row['time'],row['person'],row['source']+' → '+row['destination'],row['product'],row['quantity'],row['co'],row['state']]
         for (x,width,_),value in zip(cols,vals):text(x+5,yy,fit(value,width-15,22),22,green if value=='Thành công' else red if value=='Lỗi' else ink)
         d.line((170,yy+36,2330,yy+36),fill=line)
-    text(150,1764,'Top 5 xếp theo mã CO thành công • SL: số sản phẩm • Vùng/tỉnh theo kho xuất • Kho thiếu danh mục: Chưa phân vùng',23,muted)
-    text(150,1804,'Một CO có thể có nhiều dòng. Biểu đồ dùng giờ ghi nhận yêu cầu, không phải thời điểm MWG tạo xong.',23,muted)
-    text(150,1844,'!tongket: hôm nay • !tongket 7ngay / 30ngay • Chỉ dữ liệu BOT đã ghi nhận',22,muted);text(2350,1844,'Cập nhật '+datetime.now(tz).strftime('%H:%M %d/%m/%Y'),22,muted,False,'ra')
+    text(150,1764+extra,'Top 5 xếp theo mã CO thành công • SL: số sản phẩm • Vùng/tỉnh theo kho xuất • Kho thiếu danh mục: Chưa phân vùng',23,muted)
+    text(150,1804+extra,'Một CO có thể có nhiều dòng. Biểu đồ dùng giờ ghi nhận yêu cầu, không phải thời điểm MWG tạo xong.',23,muted)
+    text(150,1844+extra,'!tongket: hôm nay • !tongket 7ngay / 30ngay • Chỉ dữ liệu BOT đã ghi nhận',22,muted);text(2350,1844+extra,'Cập nhật '+datetime.now(tz).strftime('%H:%M %d/%m/%Y'),22,muted,False,'ra')
     directory.mkdir(parents=True,exist_ok=True);name=secrets.token_hex(24)+'.png';im.save(directory/name,optimize=True);return name
