@@ -22,7 +22,7 @@ def details(jobs, stores, tz):
         for item,result in zip(rows,results):
             success=bool(result['co']) and not result['error'];qty=int(item['quantity'])
             state='Thành công' if success else 'Chưa rõ' if j['state'] in ('unknown','succeeded') else 'Lỗi' if result['error'] or j['state']=='failed' else 'Đã hủy/hết hạn' if j['state'] in ('cancelled','expired') else 'Đang chờ'
-            recent.append(dict(time=stamp.strftime('%d/%m %H:%M'),person=labels[('people',person)],source=str(item['source']),destination=str(item['destination']),product=item.get('product_name') or 'Chưa có tên sản phẩm',quantity=qty,co=result['co'] or '—',state=state))
+            if state!='Chưa rõ':recent.append(dict(time=stamp.strftime('%d/%m %H:%M'),person=labels[('people',person)],source=str(item['source']),destination=str(item['destination']),product=item.get('product_name') or 'Chưa có tên sản phẩm',quantity=qty,co=result['co'] or '—',state=state))
             if not success:continue
             key=(result['co'],item['source'],item['destination'],item['product'],qty)
             if key in seen:continue
@@ -44,8 +44,8 @@ def details(jobs, stores, tz):
 def product_lines(name, measure, width):
     """Full product label for Top 5 only; never truncate storage or color."""
     name=re.sub(r'^điện\s+thoại\s+', '', str(name).strip(), flags=re.I)
-    # Prefer model on the first line, capacity and color on the next.
-    parts=re.split(r'\s+(?=\d+(?:[.,]\d+)?\s*(?:GB|TB)\b)',name,maxsplit=1,flags=re.I)
+    # Keep model, capacity and color together whenever the wider panel fits.
+    parts=[name]
     lines=[]
     for part in parts:
         line=''
@@ -82,7 +82,7 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     def card(x,y,w,h):d.rounded_rectangle((x,y,x+w,y+h),radius=14,fill='white',outline=line,width=2)
     def badge(x,y,n):
         color='#ffe3a2' if n==1 else '#e9f0f7';d.ellipse((x,y,x+32,y+32),fill=color);text(x+16,y+16,n,20,ink,True,'mm')
-    product_layout={key:product_lines(info['labels'].get(('product',key),key),lambda value:d.textlength(value,font=font(22)),390)
+    product_layout={key:product_lines(info['labels'].get(('product',key),key),lambda value:d.textlength(value,font=font(22)),750)
                     for key,_,_ in info['ranked']['product']}
     product_heights={key:max(41,len(lines)*28+10) for key,lines in product_layout.items()}
     extra=max(0,111+sum(product_heights.values())+10-328)
@@ -100,8 +100,8 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     dates=start.strftime('%d/%m/%Y')+' — '+(end-timedelta(days=1)).strftime('%d/%m/%Y')
     text(176,129,dates,25,ink,True);text(670,129,'Tất cả vùng  /  Tất cả tỉnh, thành  /  Tất cả kênh',24,muted)
     text(2322,129,'Giờ Việt Nam',24,muted,False,'ra')
-    cards=[('Tổng yêu cầu',stats['requests'],navy),('Mã CO thành công',stats['co'],green),('SL sản phẩm',stats['quantity'],navy),('Dòng lỗi',stats['failed'],red),('Dòng đang chờ',stats['pending'],amber),('Dòng chưa rõ',stats['unknown'],amber)]
-    cw=(2200-5*16)//6
+    cards=[('Tổng yêu cầu',stats['requests'],navy),('Mã CO thành công',stats['co'],green),('SL sản phẩm',stats['quantity'],navy),('Dòng lỗi',stats['failed'],red),('Dòng đang chờ',stats['pending'],amber)]
+    cw=(2200-(len(cards)-1)*16)//len(cards)
     for i,(label,value,color) in enumerate(cards):
         x=150+i*(cw+16);card(x,194,cw,147);d.ellipse((x+20,213,x+58,251),fill='#eaf3f6');text(x+75,218,label,24,muted);text(x+26,261,value,47,color,True)
     # Hourly successful CO trend. Uses recorded request time, never invents completion latency.
@@ -118,8 +118,8 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
         if values[h]:d.ellipse((pts[h][0]-5,pts[h][1]-5,pts[h][0]+5,pts[h][1]+5),fill=green)
     if not sum(values):text(870,538,'Chưa có CO thành công',25,muted,False,'mm')
     # Outcome denominator is transfer rows, not request count or distinct CO count.
-    card(1602,359,748,310);text(1628,378,'Kết quả xử lý theo dòng',30,ink,True)
-    outcomes=[('Thành công',stats['success_rows'],green),('Lỗi',stats['failed'],red),('Đang chờ',stats['pending'],amber),('Chưa rõ',stats['unknown'],'#8b77ba'),('Hủy / hết hạn',stats['cancelled'],'#a3b1c1')]
+    card(1602,359,748,310);text(1628,378,'Kết quả các dòng đã phân loại',30,ink,True)
+    outcomes=[('Thành công',stats['success_rows'],green),('Lỗi',stats['failed'],red),('Đang chờ',stats['pending'],amber),('Hủy / hết hạn',stats['cancelled'],'#a3b1c1')]
     total=sum(v for _,v,_ in outcomes);box=(1640,452,1840,652);angle=-90
     if not total:d.ellipse(box,fill=line)
     for label,count,color in outcomes:
@@ -127,18 +127,23 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
     d.ellipse((1683,495,1797,609),fill='white');text(1740,544,total,32,ink,True,'mm');text(1740,578,'dòng',19,muted,False,'mm')
     for i,(label,count,color) in enumerate(outcomes):
         y=450+i*40;d.ellipse((1870,y+7,1885,y+22),fill=color);text(1900,y,label,23);text(2316,y,f'{count}  ·  {count/total*100:.1f}%' if total else '0',23,muted,False,'ra')
-    # Six compact Top 5 panels in a three-column grid.
+    # The product panel gets half the lower row to keep full labels readable.
     titles={'people':'TOP 5 người yêu cầu','source':'TOP 5 kho xuất','destination':'TOP 5 kho nhận','region':'TOP 5 vùng xuất','province':'TOP 5 tỉnh/thành xuất','product':'TOP 5 sản phẩm'}
     for n,(kind,title) in enumerate(titles.items()):
-        x=150+(n%3)*740;y=687+(n//3)*346;w=720;card(x,y,w,328+(extra if n//3 else 0));text(x+22,y+18,title,28,ink,True)
+        x=150+(n%3)*740;y=687+(n//3)*346;w=720
+        if kind=='region':x,w=150,540
+        elif kind=='province':x,w=710,540
+        elif kind=='product':x,w=1270,1080
+        quantity_x=x+w-145;count_x=x+w-36
+        card(x,y,w,328+(extra if n//3 else 0));text(x+22,y+18,title,28,ink,True)
         d.rounded_rectangle((x+16,y+63,x+w-16,y+102),7,fill='#edf3f8')
         text(x+28,y+71,'#',20,muted,True)
-        is_geo=kind in ('region','province');namewidth=420 if is_geo else 390
+        is_geo=kind in ('region','province');namewidth=w-320 if is_geo else w-330
         namehead={'people':'Người yêu cầu','source':'Mã kho · Tên kho','destination':'Mã kho · Tên kho','region':'Vùng','province':'Tỉnh/thành','product':'Sản phẩm'}[kind]
         text(x+70,y+71,namehead,20,muted,True)
-        if kind=='people':text(x+575,y+71,'Yêu cầu',20,muted,True,'ra')
-        elif not is_geo:text(x+575,y+71,'SL',20,muted,True,'ra')
-        text(x+684,y+71,'CO',20,muted,True,'ra')
+        if kind=='people':text(quantity_x,y+71,'Yêu cầu',20,muted,True,'ra')
+        elif not is_geo:text(quantity_x,y+71,'SL',20,muted,True,'ra')
+        text(count_x,y+71,'CO',20,muted,True,'ra')
         rows=info['ranked'][kind]
         if not rows:text(x+28,y+159,'Chưa có dữ liệu thành công',25,muted)
         for i,(key,count,qty) in enumerate(rows):
@@ -153,9 +158,9 @@ def draw_dashboard(jobs,stores,start,end,directory,stats,tz):
                     text(x+70,yy+3+line_index*28,product_line,22)
             else:text(x+70,yy+3,fit(label,namewidth,22),22)
             if is_geo:
-                barx=x+510;d.rounded_rectangle((barx,yy+10,barx+114,yy+25),4,fill='#edf3f8');d.rounded_rectangle((barx,yy+10,barx+max(2,114*count/rows[0][1]),yy+25),4,fill=green)
-            else:text(x+575,yy+3,info['requests'][key] if kind=='people' else qty,22,ink,False,'ra')
-            text(x+684,yy+3,count,22,green,True,'ra')
+                barx=x+w-210;d.rounded_rectangle((barx,yy+10,barx+114,yy+25),4,fill='#edf3f8');d.rounded_rectangle((barx,yy+10,barx+max(2,114*count/rows[0][1]),yy+25),4,fill=green)
+            else:text(quantity_x,yy+3,info['requests'][key] if kind=='people' else qty,22,ink,False,'ra')
+            text(count_x,yy+3,count,22,green,True,'ra')
             if i<4:d.line((x+20,yy+rowheight-4,x+w-20,yy+rowheight-4),fill=line)
     # Latest records, with explicit no-data display and no mock interactions.
     card(150,1380+extra,2200,365);text(178,1398+extra,'Chi tiết CO gần đây',30,ink,True);text(2320,1407+extra,'5 dòng gần nhất trong kỳ',23,muted,False,'ra')
