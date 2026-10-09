@@ -13,6 +13,15 @@ from pathlib import Path
 from transfer_parser import parse_form, parse_request, is_transfer_message
 from destination_policy import check_destinations, BlockedDestination
 from co_regions import region_label
+from co_conditions import condition_text, load_conditions
+
+CONFIRM_SECONDS = 60
+PREVIEW_DELIVERY_SECONDS = 300
+
+def draft_expired(job, now):
+    limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
+    return now >= job['created'] + limit
+
 from co_results import items, preview_names, decode_results, result_text, note_group_text, preview_details
 
 MEMBER_CO_GROUP = 'Cb71979a134ed1fd580e3e9d133f1d29f'
@@ -66,7 +75,7 @@ HONORS = [(0,'🐣 MẦM NON BỐC HÀNG'),(50,'📦 BÀN TAY VÀNG LÀNG XIN H�
 def honor(count):
     return next(label for minimum,label in reversed(HONORS) if count>=minimum)
 
-def preview_text(job, successful_co=0):
+def preview_text(job, successful_co=0, policies=None):
     p=json.loads(job['payload']);jid=job['id']
     name=' '.join(str(p.get('requester_name') or 'bạn').split())
     blocks=[f"🏅 {honor(successful_co)} 🏅\nMời {name} xác nhận nhé! 😂"]
@@ -76,14 +85,16 @@ def preview_text(job, successful_co=0):
         counts={kind:sum(state==kind for state,label in regions) for kind in ('same','different','unknown')}
         blocks.append(f"📦 {len(rows)} lệnh · {counts['same']} cùng vùng · ⚠️ {counts['different']} khác vùng · ❓ {counts['unknown']} chưa rõ")
     for n,item in enumerate(rows,1):
+        conditions=condition_text(item,policies)
+        conditions=('\n\n'+conditions) if conditions else ''
         prefix=f"{n}. " if len(rows)>1 else ""
         blocks.append(f"{prefix}{regions[n-1][1]}\n\n"
                       f"Kho xuất: {item.get('source_name',item['source'])}\n"
                       f"Kho nhận: {item.get('destination_name',item['destination'])}\n\n"
                       f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
                       f"Số lượng: {item['quantity']}\n"
-                      f"Trạng thái: {item.get('status','Mới')}\nNote: {item['note']}")
-    blocks.append(f"XACNHAN {jid}\nHUY {jid}\n\nHiệu lực: 5 phút")
+                      f"Trạng thái: {item.get('status','Mới')}{conditions}\n\n📝 Note: {item['note']}")
+    blocks.append(f"XACNHAN {jid}\nHUY {jid}\n\n⏳ Hiệu lực: 1 phút")
     return '\n\n'.join(blocks)
 
 class Queue:
@@ -186,7 +197,9 @@ class Queue:
                     codes.add(result)
             else:
                 codes.update(row['co'] for row in rows if row['co'] and not row['error'])
-        return preview_text(job,len(codes))
+        rows=items(json.loads(job['payload']))
+        policies=load_conditions() if any(condition_text(row) for row in rows) else {}
+        return preview_text(job,len(codes),policies)
 
     def unavailable(self, db):
         row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
@@ -242,10 +255,10 @@ class Queue:
                 incoming=[transfer_key(item) for item in items(payload)]
                 if len(set(incoming))!=len(incoming):
                     raise DuplicateRequest('Có dòng trùng cả kho xuất, kho nhận, mã sản phẩm và số lượng trong tin nhắn. Chưa nhận yêu cầu này.')
-                candidates=db.execute("SELECT id,payload,state,created FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
+                candidates=db.execute("SELECT id,payload,state,created,result,notified FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
                 clashes=[]
                 for candidate in candidates:
-                    if candidate['state'] in {'draft','queued','verified_queued','preview_queued'} and candidate['created']<now-300:
+                    if (candidate['state']=='draft' and draft_expired(candidate,now)) or (candidate['state'] in {'queued','verified_queued','preview_queued'} and candidate['created']<now-300):
                         continue
                     existing={transfer_key(item) for item in items(json.loads(candidate['payload']))}
                     for number,key in enumerate(incoming,1):
@@ -291,7 +304,7 @@ class Queue:
                 return 'Mac đang kiểm tra tên sản phẩm trên MWG. Chưa tạo CO; chờ bản xác nhận có tên sản phẩm.'
             if job['state'] != 'draft':
                 return 'Yêu cầu đã được xử lý hoặc hủy; không tạo thêm bản trùng.'
-            if time.time() - job['created'] > 300:
+            if draft_expired(job,time.time()):
                 db.execute("UPDATE jobs SET state='expired' WHERE id=?",(jid,))
                 return 'Xác nhận đã hết hạn. Vui lòng gửi lại form.'
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
@@ -308,8 +321,8 @@ class Queue:
             if require_online and not cancel:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' AND created<?",
-                       (now,owner,owner,chat,now-300))
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' AND created<=? - CASE WHEN result='MWG_PREVIEW' AND notified=0 THEN 300 ELSE 60 END",
+                       (now,owner,owner,chat,now))
             jobs = db.execute("SELECT id,payload FROM jobs WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' ORDER BY created,id",
                               (owner,owner,chat)).fetchall()
             if not jobs:
@@ -351,7 +364,9 @@ class Queue:
         with self.db() as db:
             if require_online and self.unavailable(db):
                 return None
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('draft','queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-300))
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state='draft' AND created<=? - CASE WHEN result='MWG_PREVIEW' AND notified=0 THEN 300 ELSE 60 END",(time.time(),time.time()))
+            # Preserve the existing stale-queue safeguard; confirmation TTL is separate.
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-300))
             # Never automatically replay an interrupted browser operation.
             cutoff = time.time() - 900
             db.execute("UPDATE jobs SET state='failed',result=?,updated=? WHERE state='preview_running' AND updated<?",
@@ -363,7 +378,7 @@ class Queue:
             eligible="('queued','preview_queued','verified_queued')" if preview_protocol else "('queued')"
             if prepared_id:
                 prepared=db.execute('SELECT * FROM jobs WHERE id=?',(prepared_id,)).fetchone()
-                if prepared and prepared['state']=='draft' and prepared['created']>=cutoff:
+                if prepared and prepared['state']=='draft' and not draft_expired(prepared,time.time()):
                     return None  # Keep the imported MWG row until its owner confirms/cancels.
                 if prepared and prepared['state']=='draft':
                     db.execute("UPDATE jobs SET state='expired',updated=? WHERE id=?",(time.time(),prepared_id))
@@ -465,6 +480,9 @@ class Queue:
 
     def mark_notified(self, jid, state=None):
         with self.db() as db:
+            # Start the full minute only after LINE accepts the confirmation.
+            if state in (None,'draft'):
+                db.execute("UPDATE jobs SET created=? WHERE id=? AND state='draft' AND notified=0",(time.time(),jid))
             db.execute('UPDATE jobs SET notified=1 WHERE id=? AND state=?',(jid,state)) if state else db.execute('UPDATE jobs SET notified=1 WHERE id=?',(jid,))
 
 class PostgresStatements:

@@ -3,7 +3,7 @@ import re
 import unicodedata
 
 ALIASES = {
-    'source': ['kho xuat', 'ma kho xuat', 'kho chuyen', 'ma kho chuyen', 'chuyen'],
+    'source': ['kho xuat', 'ma kho xuat', 'ma kho cho', 'kho cho', 'kho chuyen', 'ma kho chuyen', 'chuyen'],
     'destination': ['kho nhan hang', 'kho nhan', 'kho nhap', 'ma kho nhan', 'ma kho nhap', 'nhap'],
     'product': ['ma san pham', 'san pham', 'ma sp', 'ma code', 'code san pham', 'msp', 'sku', 'sp', 'code'],
     'quantity': ['so luong', 'sl'],

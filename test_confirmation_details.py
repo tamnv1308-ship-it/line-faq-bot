@@ -17,7 +17,7 @@ class ConfirmationDetailsTests(unittest.TestCase):
         actions=line_text_messages('XÁC NHẬN TẠO CO — abc123def4\nThông tin')[0]['quickReply']['items']
         self.assertEqual([x['action']['text'] for x in actions],['XACNHAN abc123def4','HUY abc123def4'])
         self.assertNotIn('quickReply',line_text_messages('Thông báo thường')[0])
-    def test_compact_preview_and_five_minute_expiry(self):
+    def test_compact_preview_and_one_minute_expiry(self):
         import tempfile,time
         from co_flow import Queue,preview_text
         with tempfile.TemporaryDirectory() as d:
@@ -26,8 +26,8 @@ class ConfirmationDetailsTests(unittest.TestCase):
             j=q.draft('event','owner','chat',p)
             text=preview_text(j)
             self.assertIn('Kho xuất: 1 - Kho A\nKho nhận: 2 - Kho B',text)
-            self.assertIn('Hiệu lực: 5 phút',text)
+            self.assertIn('Hiệu lực: 1 phút',text)
             self.assertNotIn('Thương hiệu',text)
-            with q.db() as db:db.execute('UPDATE jobs SET created=? WHERE id=?',(time.time()-301,j['id']))
+            with q.db() as db:db.execute('UPDATE jobs SET created=? WHERE id=?',(time.time()-61,j['id']))
             q.confirm(j['id'],'owner','chat')
             with q.db() as db:self.assertEqual(db.execute('SELECT state FROM jobs WHERE id=?',(j['id'],)).fetchone()['state'],'expired')

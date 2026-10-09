@@ -98,7 +98,7 @@ def line_text_messages(text):
     messages=[{'type':'text','text':part} for part in message_chunks(text)]
     match=re.match(r'^Xác nhận tạo CO — ([0-9a-f]{10})\b',text,re.IGNORECASE)
     if not match and text.startswith('🏅 ') and '\nMời ' in text:
-        match=re.search(r'(?m)^XACNHAN ([0-9a-f]{10})\nHUY \1\n\nHiệu lực: 5 phút$',text)
+        match=re.search(r'(?m)^XACNHAN ([0-9a-f]{10})\nHUY \1\n\n(?:⏳ )?Hiệu lực: (?:1|5) phút$',text)
     if match:
         jid=match.group(1)
         messages[-1]['quickReply']={'items':[{'type':'action','action':{'type':'message','label':label,'text':command}} for label,command in
