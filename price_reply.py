@@ -60,9 +60,9 @@ def money(value):
     return f'{value:,}'.replace(',', '.') + 'đ'
 
 
-def render_report(snapshot, argument=''):
+def report_page(snapshot, argument=''):
     if not snapshot:
-        return 'Chưa có báo cáo giá đã xác minh. Máy Mac cần hoàn tất một lượt quét và đồng bộ dữ liệu.'
+        raise ValueError('Chưa có báo cáo giá đã xác minh. Máy Mac cần hoàn tất một lượt quét và đồng bộ dữ liệu.')
     argument = argument.strip()
     page, query = 1, argument
     if argument.isdigit():
@@ -72,7 +72,7 @@ def render_report(snapshot, argument=''):
         if match:
             page, query = int(match[1]), argument[:match.start()].strip()
     if len(query) > 120 or page < 1:
-        return 'Dùng !gia, !gia 2 hoặc !gia air m5 để tìm sản phẩm.'
+        raise ValueError('Dùng !gia, !gia 2 hoặc !gia air m5 để tìm sản phẩm.')
     groups = {}
     for item in snapshot['items']:
         if all(word in normalize(item['name'] + ' ' + item['sku']) for word in normalize(query).split()):
@@ -81,7 +81,16 @@ def render_report(snapshot, argument=''):
     total = len(ordered)
     pages = max(1, math.ceil(total / PAGE_SIZE))
     if page > pages:
-        return f'Báo cáo có {pages} trang. Gửi !gia để xem lại từ đầu.'
+        raise ValueError(f'Báo cáo có {pages} trang. Gửi !gia để xem lại từ đầu.')
+    return ordered, page, query, pages
+
+
+def render_report(snapshot, argument=''):
+    try:
+        ordered, page, query, pages = report_page(snapshot, argument)
+    except ValueError as exc:
+        return str(exc)
+    total = len(ordered)
     checked = datetime.fromisoformat(snapshot['checked']).astimezone(TZ)
     header = f'GIÁ APPLE SO VỚI MW\nCập nhật: {checked:%H:%M %d/%m/%Y} (giờ Việt Nam)\n{total} sản phẩm đã xác minh · Trang {page}/{pages}'
     if time.time() - checked.timestamp() > 18*3600:
@@ -104,7 +113,89 @@ def render_report(snapshot, argument=''):
     return '\n\n'.join(blocks)
 
 
-def install(app, reply, verify_note):
+def page_command(query, page):
+    return f'!gia {query} /{page}' if query else f'!gia {page}'
+
+
+def render_cards(snapshot, argument=''):
+    """Native LINE cards. Errors/empty searches keep the short text response."""
+    try:
+        ordered, page, query, pages = report_page(snapshot, argument)
+    except ValueError:
+        return None
+    if not ordered:
+        return None
+    checked = datetime.fromisoformat(snapshot['checked']).astimezone(TZ)
+    stale = time.time() - checked.timestamp() > 18*3600
+    total = len(ordered)
+
+    def text(value, **style):
+        return dict(type='text', text=value, wrap=True, **style)
+
+    def box(contents, **style):
+        return dict(type='box', layout='vertical', contents=contents, **style)
+
+    def button(label, command):
+        return dict(type='button', style='secondary', height='sm',
+                    action=dict(type='message', label=label, text=command))
+
+    navigation = []
+    if page > 1:
+        navigation.append(button('‹ Trang trước', page_command(query, page-1)))
+    if page < pages:
+        navigation.append(button('Trang tiếp ›', page_command(query, page+1)))
+    if not navigation:
+        navigation.append(button('Xem tất cả', '!gia'))
+    bubbles = []
+    start = (page-1)*PAGE_SIZE
+    for index, values in enumerate(ordered[start:start+PAGE_SIZE], start+1):
+        first = values[0]
+        name = re.sub(r'\bMacbook\b', 'MacBook', first['name'], flags=re.I)
+        part = re.search(r'\s+([A-Z0-9]{4,12}[A-Z]{2}/A|Z[A-Z0-9]{7,11})$', name, re.I)
+        heading = [text(name[:part.start()] if part else name, size='lg', weight='bold', color='#172B4D')]
+        if part:
+            heading.append(text(part[1], size='xs', color='#69788D', margin='sm'))
+        body = [*heading,
+                box([text('MW · GIÁ ĐỐI CHIẾU', size='xs', weight='bold', color='#456A98'),
+                     text(money(first['mw_price']), size='xxl', weight='bold', color='#172B4D', margin='sm')],
+                    backgroundColor='#EDF3FA', cornerRadius='12px', paddingAll='14px', margin='lg')]
+        for item in sorted(values, key=lambda i: ('FPT', 'CPS').index(i['retailer'])):
+            delta = item['difference']
+            color = '#C03932' if delta < 0 else '#946B10' if delta == 0 else '#087A60'
+            relation = 'Bằng giá MW' if delta == 0 else ('↓ Rẻ hơn MW ' if delta < 0 else '↑ Cao hơn MW ') + money(abs(delta))
+            retailer = 'FPT Shop' if item['retailer']=='FPT' else 'CellphoneS'
+            body.append(box([
+                dict(type='box', layout='baseline', contents=[
+                    text(retailer, size='sm', color='#45546A', weight='bold', flex=2),
+                    text(money(item['price']), size='md', color=color, weight='bold', flex=3, align='end')]),
+                text(relation, size='xs', color=color, align='end', margin='xs')],
+                margin='lg'))
+        footer = [dict(type='separator', color='#E4EAF1'),
+                  text(f'Cập nhật {checked:%H:%M · %d/%m/%Y} (VN)', size='xxs', color='#69788D', margin='md')]
+        if stale:
+            footer.append(text('Bản quét quá 18 giờ; giá có thể đã đổi.', size='xs', color='#B45309', margin='sm'))
+        footer.extend([text('Vuốt ngang để xem sản phẩm khác →', size='xxs', color='#69788D', margin='sm'),
+                       dict(type='box', layout='horizontal', spacing='sm', margin='md', contents=navigation)])
+        bubbles.append(dict(type='bubble', size='mega',
+            header=box([text(f'GIÁ APPLE  ·  {index}/{total}', size='xs', weight='bold', color='#FFFFFF'),
+                        text(f'Trang {page}/{pages}', size='xxs', color='#D3DFEF', margin='xs')],
+                       backgroundColor='#203E63', paddingAll='16px'),
+            body=box(body, paddingAll='20px'), footer=box(footer, paddingAll='20px', paddingTop='0px')))
+    # Respect LINE's 50 KB carousel cap even for unusually long Unicode names.
+    messages, current = [], []
+    alt = f'Giá Apple · Trang {page}/{pages} · {total} sản phẩm · Cập nhật {checked:%H:%M %d/%m}'
+    def message(cards):
+        return dict(type='flex', altText=alt, contents=dict(type='carousel', contents=cards))
+    for bubble in bubbles:
+        if current and len(json.dumps(message(current+[bubble]), ensure_ascii=False).encode()) > 48000:
+            messages.append(message(current)); current=[]
+        current.append(bubble)
+    if current:
+        messages.append(message(current))
+    return messages
+
+
+def install(app, reply, verify_note, reply_cards=None):
     from flask import request, abort, jsonify
     from co_flow import Queue
     path = os.environ.get('CO_DATABASE_URL') or os.environ.get('CO_DB_PATH', '')
@@ -180,8 +271,12 @@ def install(app, reply, verify_note):
                 db.execute('INSERT INTO price_reply_events VALUES(?,?,?)', (event_id, 'sending', time.time()))
                 db.execute('DELETE FROM price_reply_events WHERE created<?', (time.time()-7*86400,))
         try:
-            text = render_report(read_snapshot(), match[1] or '')
-            sent = reply(event.reply_token, text) is True
+            snapshot = read_snapshot()
+            cards = render_cards(snapshot, match[1] or '') if reply_cards else None
+            if cards:
+                sent = reply_cards(event.reply_token, cards) is True
+            else:
+                sent = reply(event.reply_token, render_report(snapshot, match[1] or '')) is True
         except Exception:
             app.logger.warning('Price reply failed; no push fallback used.')
             sent = False

@@ -17,6 +17,7 @@ from linebot.v3.messaging import (
     ApiClient,
     Configuration,
     ImageMessage,
+    FlexMessage,
     MessagingApi,
     PushMessageRequest,
     ReplyMessageRequest,
@@ -321,7 +322,18 @@ def verify_price_note():
         return False
 
 import price_reply
-handle_price = price_reply.install(app, reply_text, verify_price_note)
+
+def reply_price_cards(token, messages):
+    try:
+        with ApiClient(configuration) as client:
+            MessagingApi(client).reply_message(ReplyMessageRequest(reply_token=token,
+                messages=[FlexMessage.from_dict(message) for message in messages]), _request_timeout=10)
+        return True
+    except Exception:
+        app.logger.warning('Không gửi được thẻ giá qua Reply API.')
+        return False
+
+handle_price = price_reply.install(app, reply_text, verify_price_note, reply_price_cards)
 
 scheduler.add_job(notify_co, 'interval', seconds=1, id='co_result_notifications', max_instances=1)
 scheduler.start()
@@ -334,7 +346,7 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "price_command": "!gia-v1"}, 200
+    return {"status": "ok", "price_command": "!gia-cards-v2"}, 200
 
 
 @app.route("/report-images/<filename>")

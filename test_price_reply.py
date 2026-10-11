@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 
 from flask import Flask
 from co_results import message_chunks
-from price_reply import NOTE_GROUP, install, render_report, sync_key, validate_snapshot
+from price_reply import NOTE_GROUP, install, render_report, render_cards, sync_key, validate_snapshot
 
 
 def sample(n=1):
@@ -108,6 +108,33 @@ class PriceReplyTests(unittest.TestCase):
         old=copy.deepcopy(data);old['checked']=(datetime.now(timezone.utc)-timedelta(hours=1)).isoformat()
         self.assertEqual(self.upload(old).status_code,409)
 
+    def test_cards_keep_prices_and_navigation_within_line_limits(self):
+        from linebot.v3.messaging import FlexMessage
+        data=sample(65)
+        cards=render_cards(validate_snapshot(data),'air /2')
+        bubbles=[b for m in cards for b in m['contents']['contents']]
+        self.assertEqual(len(bubbles),10)
+        serialized=json.dumps(cards,ensure_ascii=False)
+        self.assertIn('33.690.000đ',serialized)
+        self.assertIn('Rẻ hơn MW 500.000đ',serialized)
+        self.assertIn('!gia air /1',serialized);self.assertIn('!gia air /3',serialized)
+        for item in data['items']:item['name']='😀'*500
+        for message in render_cards(validate_snapshot(data)):
+            self.assertLess(len(json.dumps(message,ensure_ascii=False).encode()),50000)
+            self.assertLessEqual(len(message['contents']['contents']),12)
+            self.assertEqual(FlexMessage.from_dict(message).type,'flex')
+        single=sample();single['items']=single['items'][:1]
+        self.assertNotIn('CellphoneS',json.dumps(render_cards(validate_snapshot(single)),ensure_ascii=False))
+        self.assertIsNone(render_cards(validate_snapshot(single),'no-match'))
+
+    def test_failed_card_reply_never_falls_back_to_another_send(self):
+        cards=Mock(return_value=False)
+        app=Flask('price-card-failure')
+        handle=install(app,self.reply,self.verify,reply_cards=cards)
+        self.upload()
+        handle(self.event())
+        cards.assert_called_once();self.reply.assert_not_called()
+
 
 class SignedWebhookTests(unittest.TestCase):
     def test_signed_note_command_uses_reply_api_and_bad_signature_is_rejected(self):
@@ -138,7 +165,8 @@ class SignedWebhookTests(unittest.TestCase):
                 api.return_value.reply_message.assert_called_once()
                 api.return_value.push_message.assert_not_called()
                 payload=api.return_value.reply_message.call_args.args[0]
-                self.assertIn('GIÁ APPLE',payload.messages[0].text)
+                self.assertEqual(payload.messages[0].type,'flex')
+                self.assertIn('Giá Apple',payload.messages[0].alt_text)
                 self.assertEqual(client.post('/callback',data=body,headers={'X-Line-Signature':'invalid'}).status_code,400)
                 api.return_value.reply_message.assert_called_once()
 
