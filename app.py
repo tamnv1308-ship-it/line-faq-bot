@@ -312,6 +312,17 @@ def reply_summary_image(token,url):
 import co_summary
 handle_summary=co_summary.install(app,reply_text,reply_summary_image,scheduler,config.REPORT_PUBLIC_BASE_URL)
 
+def verify_price_note():
+    try:
+        with ApiClient(configuration) as client:
+            group = MessagingApi(client).get_group_summary(price_reply.NOTE_GROUP, _request_timeout=3)
+        return group.group_id == price_reply.NOTE_GROUP and group.group_name.strip().casefold() == 'note'
+    except Exception:
+        return False
+
+import price_reply
+handle_price = price_reply.install(app, reply_text, verify_price_note)
+
 scheduler.add_job(notify_co, 'interval', seconds=1, id='co_result_notifications', max_instances=1)
 scheduler.start()
 
@@ -323,7 +334,7 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}, 200
+    return {"status": "ok", "price_command": "!gia-v1"}, 200
 
 
 @app.route("/report-images/<filename>")
@@ -397,6 +408,8 @@ def log_message_source(event):
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    if handle_price(event):
+        return
     log_message_source(event)
     if handle_summary(event):
         return
@@ -430,7 +443,8 @@ def handle_message(event):
         text = (
             f"🤖 {config.BOT_NAME}\n\n"
             f"🔎 {config.BOT_PREFIX}<keyword>: tra cứu\n"
-            f"📊 {config.BOT_PREFIX}testreport: gửi thử report"
+            f"📊 {config.BOT_PREFIX}testreport: gửi thử report\n"
+            f"💰 {config.BOT_PREFIX}gia: xem giá Apple mới nhất trong nhóm NOTE"
         )
 
     # LỆNH NỘI BỘ: GỬI NỘI DUNG TỰ VIẾT SANG GROUP KHÁC

@@ -1,5 +1,11 @@
 # Tạo CO từ LINE với máy Mac
 
+## Xem giá Apple trong NOTE
+
+`!gia` trả báo cáo so sánh MW/FPT/CellphoneS từ lượt quét KDBT đầy đủ gần nhất trên Mac; `!gia 2` xem trang tiếp theo; `!gia air m5` tìm theo tên. Mỗi trang tối đa 10 sản phẩm. Giá chưa xác minh không hiển thị; luôn ghi thời điểm quét và cảnh báo khi bản quét quá 18 giờ.
+
+Lệnh chỉ xử lý trong group NOTE đã xác minh ID/tên và dùng Reply API ngay trong webhook. Không tự quét website trong webhook, không chuyển sang Push khi trả lời thất bại. Mac đồng bộ snapshot qua `PUT /price/report`, dùng khóa HMAC riêng suy ra từ `CO_WORKER_TOKEN` với nhãn `apple-price-report-sync:v1`. Khóa này không có quyền gọi API worker CO. Dữ liệu lưu trong hai bảng `price_reply_snapshot` và `price_reply_events` của DB bền vững hiện có. `GET /price/status` yêu cầu cùng khóa, dùng kiểm tra đồng bộ và lần trả lời thành công gần nhất. Snapshot cũ/không đầy đủ/mâu thuẫn bị từ chối.
+
 Bot nhận form, gửi bản xem lại, và chỉ đưa vào hàng đợi khi chính người gửi xác nhận trong cùng cuộc chat. Hàng đợi SQLite nằm trên persistent disk Render tại `/var/data/co.db`. Mặc định chỉ các quản trị viên có sẵn trong `config.ADMIN_USER_IDS` được dùng CO; có thể giới hạn riêng bằng `CO_ALLOWED_USER_IDS`.
 
 ## Chạy trên Mac đã chuẩn bị
