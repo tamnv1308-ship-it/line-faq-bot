@@ -52,6 +52,9 @@ def add_requester_note(payload, requester_name):
 class DuplicateRequest(ValueError):
     pass
 
+def stock_key(item):
+    return (str(int(item["source"])),item["product"].strip())
+
 def transfer_key(item):
     return (str(int(item['source'])),str(int(item['destination'])),item['product'].strip(),int(item['quantity']))
 
@@ -252,6 +255,10 @@ class Queue:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
             if check_duplicates:
+                incoming_stocks={stock_key(item) for item in items(payload)}
+                for uncertain in db.execute("SELECT id,payload FROM jobs WHERE state='unknown'").fetchall():
+                    if incoming_stocks & {stock_key(item) for item in items(json.loads(uncertain['payload']))}:
+                        raise DuplicateRequest('Kho xuất và mã sản phẩm đang có yêu cầu chưa rõ kết quả '+uncertain['id']+'. Cần đối soát MWG trước khi tạo tiếp; chưa nhận yêu cầu này.')
                 incoming=[transfer_key(item) for item in items(payload)]
                 if len(set(incoming))!=len(incoming):
                     raise DuplicateRequest('Có dòng trùng cả kho xuất, kho nhận, mã sản phẩm và số lượng trong tin nhắn. Chưa nhận yêu cầu này.')
@@ -345,8 +352,8 @@ class Queue:
 
     def blocked_notice(self, db):
         if db.execute("SELECT 1 FROM jobs WHERE state='unknown'").fetchone():
-            return ('\nHàng đợi hiện bị tạm dừng vì có yêu cầu chưa rõ kết quả trên MWG. '
-                    'Cần đối soát trước khi chạy tiếp. Gửi HUY CHO nếu muốn hủy các yêu cầu chưa được Mac nhận.')
+            return ('\nCó yêu cầu cần đối soát MWG. Yêu cầu cùng kho xuất và mã sản phẩm bị tạm dừng; '
+                    'các yêu cầu khác có thể tiếp tục khi Mac xác nhận trang đã sẵn sàng.')
         return ''
 
     def cancel_waiting(self, owner, chat):
@@ -360,7 +367,7 @@ class Queue:
             message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
             return message + self.blocked_notice(db)
 
-    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False):
+    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False, recovery_protocol=False, page_ready=False):
         with self.db() as db:
             if require_online and self.unavailable(db):
                 return None
@@ -373,8 +380,16 @@ class Queue:
                        ('Mac gián đoạn khi kiểm tra sản phẩm; chưa tạo CO.',time.time(),cutoff))
             db.execute("UPDATE jobs SET state='unknown',result=?,updated=? WHERE state IN ('running','submitting') AND updated<?",
                        ('Máy Mac gián đoạn. Cần kiểm tra MWG trước khi gửi lại để tránh tạo trùng.',time.time(),cutoff))
-            if db.execute("SELECT 1 FROM jobs WHERE state IN ('running','submitting','unknown','preview_running')").fetchone():
+            if db.execute("SELECT 1 FROM jobs WHERE state IN ('running','submitting','preview_running')").fetchone():
                 return None
+            unresolved=db.execute("SELECT payload FROM jobs WHERE state='unknown'").fetchall()
+            if unresolved and not recovery_protocol:
+                return None  # Older workers must retain their global safety stop.
+            if unresolved and not page_ready:
+                return {'recovery_required':True}
+            blocked={stock_key(item) for row in unresolved for item in items(json.loads(row['payload']))}
+            def conflicts(candidate):
+                return any(stock_key(item) in blocked for item in items(json.loads(candidate['payload'])))
             eligible="('queued','preview_queued','verified_queued')" if preview_protocol else "('queued')"
             if prepared_id:
                 prepared=db.execute('SELECT * FROM jobs WHERE id=?',(prepared_id,)).fetchone()
@@ -386,8 +401,8 @@ class Queue:
                     return {'release_preview':True}
                 job=prepared
             else:
-                job = db.execute("SELECT * FROM jobs WHERE state IN "+eligible+" ORDER BY created LIMIT 1").fetchone()
-            if not job:
+                job = next((row for row in db.execute("SELECT * FROM jobs WHERE state IN "+eligible+" ORDER BY created").fetchall() if not conflicts(row)),None)
+            if not job or conflicts(job):
                 return None
             if 'items' in json.loads(job['payload']) and not batch_protocol:
                 return None
@@ -524,7 +539,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
         prepared=body.get('prepared_id')
         if prepared is not None and (not isinstance(prepared,str) or not re.fullmatch(r'[0-9a-f]{10}',prepared)):
             abort(400)
-        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1,require_online=True))
+        return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1,require_online=True,
+                                   recovery_protocol=body.get('recovery_protocol')==1,page_ready=body.get('page_ready') is True))
 
     @app.post('/co/worker/heartbeat')
     def heartbeat():
