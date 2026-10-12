@@ -11,7 +11,7 @@ def details(jobs, stores, tz):
     groups={k:defaultdict(set) for k in ('people','source','destination','region','province','product')}
     quantities={k:Counter() for k in groups}; requests=Counter();labels={}; hourly=defaultdict(set);recent=[];seen=set()
     for j in sorted(jobs,key=lambda r:(r.get('created',0),r.get('id',''))):
-        p=json.loads(j['payload']);rows=items(p);person=j['owner'];requests[person]+=1
+        p=json.loads(j['payload']);rows=items(p);person=j['owner'];requests[person]+=p.get('request_count',1)
         labels[('people',person)]=p.get('requester_name') or 'Chưa có tên'
         stamp=datetime.fromtimestamp(j.get('created',0),tz)
         try:results=decode_results(p,j.get('result') or '')

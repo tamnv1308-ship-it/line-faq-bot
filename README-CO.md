@@ -1,5 +1,16 @@
 # Tạo CO từ LINE với máy Mac
 
+## Gom tin nhắn trong 10 giây (2026-10-12)
+
+Mặc định `CO_GATHER_SECONDS=10`: từ lúc nhận tin đầu, bot đợi một cửa sổ cố định 10 giây và gom các tin hợp lệ của cùng người gửi, cùng cuộc chat, cùng trạng thái sản phẩm. Tin tiếp theo không kéo dài cửa sổ. Mỗi file tối đa 7 dòng; một tin có nhiều dòng được giữ nguyên, không chia nhỏ để lấp chỗ trống. Tin vượt giới hạn hoặc đến sau cửa sổ sẽ thành yêu cầu riêng. Có thể đặt `CO_GATHER_SECONDS=0` để trở lại xử lý từng tin ngay.
+
+Sau cửa sổ, Mac nhập một file và gửi một bản xác nhận chung. Xác nhận/Hủy áp dụng toàn bộ các dòng trong bản đó, chỉ người gửi hoặc chủ bot được thao tác theo quyền hiện có. Hiệu lực vẫn là 1 phút từ khi bản xác nhận được gửi thành công. Khi xác nhận, bot dùng bảng đã nhập để tạo CO, không reload hoặc nhập lại chỉ vì đã gom tin. Kết quả liệt kê từng dòng cùng mã CO/lỗi.
+
+Chống trùng, chặn kho nhận và quy tắc trạng thái chưa rõ kết quả vẫn áp dụng trước khi nhận thêm dòng. Tin đã nhận lại do LINE gửi lại không được thêm lần hai. Tổng kết vẫn đếm đủ số tin yêu cầu ban đầu. Dữ liệu ánh xạ tin gom được dọn cùng lịch sử sau 30 ngày và giữ dấu chống xử lý lại.
+
+Thay đổi nằm ở `co_flow.py`, `co_summary.py`, `co_summary_view.py`; worker Mac hiện tại đã hỗ trợ file nhiều dòng. Kiểm thử: `python -m unittest test_gather test_preview_reply` và `python -m unittest discover`. Các phần bên dưới mô tả những phiên bản trước; mục này là quy tắc gom tin mới nhất.
+
+
 ## Xem giá Apple trong NOTE
 
 `!gia` trả báo cáo so sánh MW/FPT/CellphoneS từ lượt quét KDBT đầy đủ gần nhất trên Mac bằng thẻ LINE Flex: mỗi sản phẩm một thẻ, vuốt ngang để xem và bấm Trang trước/Trang tiếp. `!gia 2` vẫn xem trang tiếp theo; `!gia air m5` tìm theo tên. Mỗi trang tối đa 10 sản phẩm. Giá đối thủ thấp hơn MW tô đỏ, bằng giá màu vàng, cao hơn màu xanh; luôn có chữ chỉ rõ chênh lệch. Giá chưa xác minh không hiển thị; luôn ghi thời điểm quét và cảnh báo khi bản quét quá 18 giờ. Thông báo không có dữ liệu/tìm kiếm không khớp vẫn trả chữ ngắn. Thẻ được gửi bằng Reply API; không gửi lại bằng Push hoặc tin khác nếu yêu cầu gửi thẻ thất bại.

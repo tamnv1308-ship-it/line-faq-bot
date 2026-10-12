@@ -17,6 +17,8 @@ from co_conditions import condition_text, load_conditions
 
 CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
+GATHER_SECONDS = 10
+MAX_BATCH_ROWS = 7
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -116,6 +118,11 @@ class Queue:
                 result TEXT, notified INTEGER NOT NULL DEFAULT 0);
               CREATE TABLE IF NOT EXISTS preview_replies (
                 job_id TEXT PRIMARY KEY, token TEXT NOT NULL, received REAL NOT NULL);
+              CREATE TABLE IF NOT EXISTS co_gather_windows (
+                job_id TEXT PRIMARY KEY, closes REAL NOT NULL);
+              CREATE TABLE IF NOT EXISTS co_gather_events (
+                event TEXT PRIMARY KEY, job_id TEXT NOT NULL);
+              CREATE INDEX IF NOT EXISTS co_gather_events_job ON co_gather_events(job_id);
               CREATE TABLE IF NOT EXISTS co_note_outbox (
                 job_id TEXT PRIMARY KEY, destination TEXT NOT NULL, message TEXT NOT NULL,
                 delivered INTEGER NOT NULL DEFAULT 0);
@@ -242,11 +249,15 @@ class Queue:
             return (f"Mac: {'online' if online else 'offline'}\nNhận CO: {'BẬT' if row['enabled'] and online else 'TẮT'}\n"
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
-    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False):
+    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0):
         check_destinations(payload)
-        now = time.time()
+        if gather_seconds not in (0,GATHER_SECONDS):
+            raise ValueError('Thời gian gom yêu cầu chỉ hỗ trợ 0 hoặc 10 giây.')
         with self.db() as db:
+            now = time.time()
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
+            if not old:
+                old=db.execute('SELECT j.* FROM jobs j JOIN co_gather_events e ON e.job_id=j.id WHERE e.event=?',(event,)).fetchone()
             if old:
                 return dict(old)
             if db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',(hashlib.sha256(event.encode()).hexdigest(),)).fetchone():
@@ -273,10 +284,31 @@ class Queue:
                             clashes.append(f"Dòng {number} trùng yêu cầu {candidate['id']}")
                 if clashes:
                     raise DuplicateRequest('Cảnh báo tạo trùng: cùng kho xuất, kho nhận, mã sản phẩm và số lượng với yêu cầu đang chờ, đang xử lý hoặc chưa rõ kết quả.\n'+'\n'.join(clashes)+'\nChưa nhận tin nhắn này; bỏ dòng trùng rồi gửi lại các dòng còn lại.')
+            # Only the same owner may approve/cancel the combined rows. Never
+            # append to a claimed preview or extend the first message's deadline.
+            if check_product and gather_seconds:
+                candidates=db.execute("SELECT j.* FROM jobs j JOIN co_gather_windows w ON w.job_id=j.id WHERE j.state='preview_queued' AND j.owner=? AND j.chat=? AND w.closes>? ORDER BY j.created,j.id",(owner,chat,now)).fetchall()
+                for candidate in candidates:
+                    previous=json.loads(candidate['payload'])
+                    combined=items(previous)+items(payload)
+                    if len(combined)>MAX_BATCH_ROWS or len({row.get('status','Mới') for row in combined})!=1:
+                        continue
+                    merged={'items':combined,'status':combined[0].get('status','Mới'),'batch_version':1,
+                            'requester_name':previous.get('requester_name') or payload.get('requester_name',''),
+                            'request_count':previous.get('request_count',1)+1}
+                    jid=candidate['id']
+                    db.execute('UPDATE jobs SET payload=?,updated=? WHERE id=?',(json.dumps(merged,ensure_ascii=False),now,jid))
+                    db.execute('INSERT INTO co_gather_events(event,job_id) VALUES(?,?)',(event,jid))
+                    if reply_token:
+                        db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+                        db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,now))
+                    return dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
             # Keep each preview pending so the owner can confirm several forms together.
             jid = secrets.token_hex(5)
             db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated) VALUES(?,?,?,?,?,?,?,?)',
                        (jid,event,owner,chat,json.dumps(payload,ensure_ascii=False),'preview_queued' if check_product else 'draft',now,now))
+            if check_product and gather_seconds:
+                db.execute('INSERT INTO co_gather_windows(job_id,closes) VALUES(?,?)',(jid,now+gather_seconds))
             if check_product and reply_token:
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,now))
             return dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
@@ -401,7 +433,7 @@ class Queue:
                     return {'release_preview':True}
                 job=prepared
             else:
-                job = next((row for row in db.execute("SELECT * FROM jobs WHERE state IN "+eligible+" ORDER BY created").fetchall() if not conflicts(row)),None)
+                job = next((row for row in db.execute("SELECT j.* FROM jobs j LEFT JOIN co_gather_windows w ON w.job_id=j.id WHERE j.state IN "+eligible+" AND (w.closes IS NULL OR w.closes<=?) ORDER BY j.created,j.id",(time.time(),)).fetchall() if not conflicts(row)),None)
             if not job or conflicts(job):
                 return None
             if 'items' in json.loads(job['payload']) and not batch_protocol:
@@ -516,6 +548,9 @@ class PostgresStatements:
 def install(app, reply, push, default_users=(), requester_name=None):
     from flask import request, jsonify, abort
     enabled = os.getenv('CO_ENABLED') == '1'
+    gather_seconds=int(os.getenv('CO_GATHER_SECONDS',str(GATHER_SECONDS)))
+    if gather_seconds not in (0,GATHER_SECONDS):
+        raise RuntimeError('CO_GATHER_SECONDS chỉ hỗ trợ 0 hoặc 10.')
     queue = None
     if enabled:
         path = os.environ.get('CO_DATABASE_URL') or os.environ.get('CO_DB_PATH', '')
@@ -676,7 +711,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 event_id=getattr(event,'webhook_event_id',None)
                 if not event_id:
                     event_id='message:'+event.message.id
-                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token,require_online=True,check_duplicates=True)
+                job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token,require_online=True,check_duplicates=True,gather_seconds=gather_seconds)
                 if job['state'] in {'preview_queued','preview_running'}:
                     if os.getenv('CO_ACK_RECEIPT','0')=='1':
                         # Consume the form token once for receipt; MWG preview follows by push.

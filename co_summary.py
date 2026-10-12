@@ -29,7 +29,7 @@ def aggregate(jobs,stores):
     stats=Counter(); ranks={k:Counter() for k in ('people','source','destination','region','province','product')};names={}
     seen=set()
     for j in jobs:
-        p=json.loads(j['payload']); data=items(p); stats['requests']+=1
+        p=json.loads(j['payload']); data=items(p); stats['requests']+=p.get('request_count',1)
         names[j['owner']]=p.get('requester_name') or 'Chưa có tên'
         try:results=decode_results(p,j['result'] or '')
         except (ValueError,TypeError):
@@ -68,7 +68,9 @@ def cleanup(queue,directory):
         for jid in ids:
             row=db.execute('SELECT event FROM jobs WHERE id=?',(jid,)).fetchone()
             db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',(hashlib.sha256(row['event'].encode()).hexdigest(),))
-            for table in ('preview_replies','co_note_rows','co_note_outbox'):db.execute('DELETE FROM '+table+' WHERE job_id=?',(jid,))
+            for event in db.execute('SELECT event FROM co_gather_events WHERE job_id=?',(jid,)).fetchall():
+                db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',(hashlib.sha256(event['event'].encode()).hexdigest(),))
+            for table in ('preview_replies','co_note_rows','co_note_outbox','co_gather_events','co_gather_windows'):db.execute('DELETE FROM '+table+' WHERE job_id=?',(jid,))
             db.execute('DELETE FROM jobs WHERE id=?',(jid,))
     if directory.exists():
         for p in directory.glob('*.png'):

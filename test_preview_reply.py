@@ -12,7 +12,7 @@ class ReplyTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.path=str(Path(self.tmp.name)/'q.db')
         self.replies=[];self.pushes=[]
-        self.env=patch.dict(os.environ,{'CO_ENABLED':'1','CO_ACK_RECEIPT':'0','CO_DB_PATH':self.path,'CO_DATABASE_URL':'','CO_WORKER_TOKEN':'x'*32,'CO_ALLOWED_USER_IDS':'owner'})
+        self.env=patch.dict(os.environ,{'CO_ENABLED':'1','CO_ACK_RECEIPT':'0','CO_GATHER_SECONDS':'0','CO_DB_PATH':self.path,'CO_DATABASE_URL':'','CO_WORKER_TOKEN':'x'*32,'CO_ALLOWED_USER_IDS':'owner'})
         self.env.start();self.addCleanup(self.env.stop)
         app=types.SimpleNamespace(post=lambda route:lambda f:f,get=lambda route:lambda f:f,logger=types.SimpleNamespace(warning=lambda *args:None))
         flask=types.SimpleNamespace(request=None,jsonify=None,abort=None)
