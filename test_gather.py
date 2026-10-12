@@ -182,6 +182,26 @@ class GatherTests(unittest.TestCase):
 
 
 class GatherWebhookTests(unittest.TestCase):
+    def test_authenticated_status_exposes_effective_gather_setting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            routes={}
+            def route(path):
+                def register(func):
+                    routes[path]=func
+                    return func
+                return register
+            app=types.SimpleNamespace(post=route,get=route)
+            flask=types.SimpleNamespace(request=types.SimpleNamespace(headers={'Authorization':'Bearer '+'x'*32}),
+                                        jsonify=lambda **kwargs:kwargs,abort=lambda code:None)
+            env={'CO_ENABLED':'1','CO_DB_PATH':str(Path(tmp)/'q.db'),'CO_DATABASE_URL':'','CO_WORKER_TOKEN':'x'*32}
+            with patch.dict(os.environ,env),patch.dict('sys.modules',{'flask':flask}):
+                for setting in ('0','10'):
+                    os.environ['CO_GATHER_SECONDS']=setting
+                    install(app,lambda *a:None,lambda *a:None)
+                    status=routes['/co/worker/status']()
+                    self.assertEqual(status['gather_seconds'],int(setting))
+                    self.assertEqual(status['max_batch_rows'],7)
+
     def test_default_ten_seconds_from_line_to_one_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=str(Path(tmp)/'q.db');replies=[]

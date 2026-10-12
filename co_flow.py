@@ -589,7 +589,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
         authenticated()
         with queue.db() as db:
             counts={row['state']:row['n'] for row in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
-        return jsonify(enabled=True, states=counts, allowed_users=len(users))
+        return jsonify(enabled=True, states=counts, allowed_users=len(users),
+                       gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS)
 
     @app.post('/co/worker/result')
     def result():
