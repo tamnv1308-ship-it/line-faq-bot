@@ -10,7 +10,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from transfer_parser import parse_form, parse_request, is_transfer_message
+from transfer_parser import parse_form, parse_request, is_transfer_message, COPIED_TEXT_VERSION
 from destination_policy import check_destinations, BlockedDestination
 from co_regions import region_label
 from co_conditions import condition_text, load_conditions
@@ -590,7 +590,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
         with queue.db() as db:
             counts={row['state']:row['n'] for row in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
         return jsonify(enabled=True, states=counts, allowed_users=len(users),
-                       gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS)
+                       gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
+                       copied_text_version=COPIED_TEXT_VERSION)
 
     @app.post('/co/worker/result')
     def result():

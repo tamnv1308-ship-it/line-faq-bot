@@ -201,6 +201,7 @@ class GatherWebhookTests(unittest.TestCase):
                     status=routes['/co/worker/status']()
                     self.assertEqual(status['gather_seconds'],int(setting))
                     self.assertEqual(status['max_batch_rows'],7)
+                    self.assertEqual(status['copied_text_version'],1)
 
     def test_default_ten_seconds_from_line_to_one_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:

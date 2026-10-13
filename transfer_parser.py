@@ -17,6 +17,18 @@ LABEL = '|'.join(re.escape(a).replace(r'\ ', r'[ \t]+') for a in sorted(LOOKUP,k
 # Restrict labels to line/semicolon/pipe boundaries, not numbers inside prose or @mentions.
 FIELD = re.compile(r'(?:^|[;|])[ \t]*(?:(?:[-*•]|[0-9]+[.)])[ \t]*)?('+LABEL+r')(?=[ \t]*(?:[:：=]|[0-9])|[ \t]*$)[ \t]*(?:[:：=][ \t]*)?',re.I)
 
+COPY_FORMATTING = str.maketrans({
+    '\ufeff': None, '\u200b': None, '\u2060': None,
+    '\u200e': None, '\u200f': None,
+    '\u00a0': ' ', '\u202f': ' ',
+})
+COPIED_TEXT_VERSION = 1
+
+def clean_copied_text(text):
+    # Remove copy/paste markers before matching labels, keeping Vietnamese
+    # accents, newlines, and emoji joiners in contact notes intact.
+    return unicodedata.normalize('NFC',text).translate(COPY_FORMATTING)
+
 
 def fold(text):
     return ''.join(c for c in unicodedata.normalize('NFD',text.lower().replace('đ','d'))
@@ -33,7 +45,7 @@ def normalize_status(value):
 
 def parts(text):
     # NFC keeps folded indices aligned with the original Vietnamese text.
-    text=unicodedata.normalize('NFC',text).replace('\u00a0',' ')
+    text=clean_copied_text(text)
     for line in text.splitlines():
         matches=list(FIELD.finditer(fold(line)))
         if not matches:
@@ -153,7 +165,7 @@ def parse_request(text):
     if len(text)>10000:
         raise ValueError('Tin nhắn quá dài (tối đa 10000 ký tự).')
     groups=[]; lines=[]; seen=set()
-    for line in unicodedata.normalize('NFC',text).splitlines():
+    for line in clean_copied_text(text).splitlines():
         keys={key for key,value in parts(line) if key in LABELS}
         separator=bool(line.strip()) and bool(re.fullmatch(r'[\\\s=\-_*]{3,}',line))
         if (separator and seen) or (keys & seen):
