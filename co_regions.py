@@ -5,19 +5,46 @@ import os
 import zlib
 from functools import lru_cache
 from pathlib import Path
+from co_store_directory import override_path
 
 REGIONS = {'Hà Nội +', 'Hồ Chí Minh', 'Đông Tây Bắc', 'Đồng Bằng Sông Hồng',
            'Trung Bộ', 'Duyên Hải', 'Đông Cao Nguyên', 'Tây Nam Bộ'}
 
+@lru_cache(maxsize=2)
+def _file_stores(path,stamp,size,inode,override):
+    payload=json.loads(Path(path).read_text())
+    mapping=payload['stores'] if override else payload
+    if not isinstance(mapping,dict) or any(not isinstance(row,dict) for row in mapping.values()):
+        raise ValueError('Danh mục shop không hợp lệ.')
+    return mapping
+
 @lru_cache(maxsize=1)
+def _packed_stores(packed):
+    return json.loads(zlib.decompress(base64.b64decode(packed)))
+
 def stores():
     try:
+        path=override_path()
+        if path.exists():
+            stat=path.stat()
+            return _file_stores(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ino,True)
         packed = os.getenv('CO_STORES_ZLIB')
         if packed:
-            return json.loads(zlib.decompress(base64.b64decode(packed)))
-        return json.loads(Path(os.getenv('CO_STORES_PATH', '/var/data/co_stores.json')).read_text())
-    except (ValueError, OSError, zlib.error):
+            return _packed_stores(packed)
+        path=Path(os.getenv('CO_STORES_PATH', '/var/data/co_stores.json'));stat=path.stat()
+        return _file_stores(str(path),stat.st_mtime_ns,stat.st_size,stat.st_ino,False)
+    except (ValueError, OSError, zlib.error, KeyError, TypeError):
         return {}
+
+def clear_store_cache():
+    _file_stores.cache_clear();_packed_stores.cache_clear()
+
+def cluster_label(item):
+    mapping=stores()
+    source={g['id']:g for g in mapping.get(str(int(item['source'])),{}).get('clusters',[])}
+    destination={g['id']:g for g in mapping.get(str(int(item['destination'])),{}).get('clusters',[])}
+    shared=sorted(source.keys() & destination.keys())
+    return '⚠️ CÙNG CỤM: '+', '.join(source[g]['name'] for g in shared) if shared else ''
 
 def region(code):
     value = stores().get(str(int(code)), {}).get('region', '').strip()

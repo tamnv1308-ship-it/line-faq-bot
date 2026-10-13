@@ -1,5 +1,14 @@
 # Tạo CO từ LINE với máy Mac
 
+## Danh mục Shop và cảnh báo cùng cụm (2026-10-13)
+
+Danh mục được cập nhật từ sheet Chi Tiết và Cụm của file người dùng cung cấp. Chi Tiết dùng mã chi nhánh cột C, tên kho D, vùng A, phường H, tỉnh mới I và giữ tỉnh cũ L để truy vết. Bỏ qua các vùng ngoài 8 vùng hiện có, gồm An Khang/AvaWorld. Sheet Cụm: MST cột C và ST Base cột F đều có quan hệ trực tiếp với cụm cột E. Chữ hoa/thường trong tên cụm được chuẩn hóa; một base có thể tham gia nhiều quan hệ, không suy diễn ghép cụm bắc cầu.
+
+Nếu kho xuất và kho nhận có ít nhất một cụm chung, bản xác nhận thêm dòng `⚠️ CÙNG CỤM: <tên cụm>` ngay dưới cùng/khác Vùng. Đây là thông tin cảnh báo để người gửi xem trước, không chặn tạo CO hay sửa Note/Excel. Tổng kết dùng cùng danh mục mới.
+
+Dữ liệu shop không đưa vào GitHub công khai. `import_store_directory.py --file <file.xlsx> --output <private.json>` chỉ đọc workbook và xuất JSON chuẩn hóa. `POST /co/worker/store-directory` yêu cầu worker authentication, kiểm tra giới hạn/cấu trúc và lưu nguyên tử trên persistent disk, giữ một bản trước để khôi phục. `GET` cùng đường dẫn chỉ trả nguồn, checksum và số lượng; không trả danh sách. File override được ưu tiên hơn cấu hình ZLIB cũ và tự cập nhật cache khi thay đổi, nên không cần khởi động lại Mac.
+
+
 ## Quá hạn xác nhận và mở khóa (2026-10-13)
 
 Hiệu lực là 1 phút từ khi LINE nhận bản xác nhận. Quá hạn thì yêu cầu tự hủy trước khi tạo CO và Mac chuyển sang yêu cầu tiếp theo. Với bản xác nhận mới đã báo quy tắc, mỗi lần quá hạn tính một lần cho người gửi (một bản gộp nhiều dòng vẫn tính một lần): lần 1 khóa nhận yêu cầu mới 1 phút; lần 2 khóa 3 phút; lần 3 khóa đến khi chủ bot Tâm mở lại. Hết thời gian khóa 1/3 phút không reset số lần. Tâm được miễn khóa. Không tính vi phạm cho bản chưa gửi được, bản trước khi áp dụng quy tắc, người chủ động Hủy, hoặc khi bot đang offline/tạm dừng lúc kiểm tra hết hạn.

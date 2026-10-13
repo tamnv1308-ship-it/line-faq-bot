@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont
 from co_results import items, decode_results
+from co_regions import stores as store_directory
 TZ=ZoneInfo('Asia/Ho_Chi_Minh')
 OWNER='U60751d1a57eb4707a3dff9c06f3240a4'
 TERMINAL=('succeeded','failed','cancelled','expired')
@@ -98,11 +99,8 @@ def install(app,reply,reply_image,scheduler,base_url):
             if not q or not base_url:raise ValueError('Báo cáo CO chưa được cấu hình.')
             start,end=period(bits[1] if len(bits)>1 else '')
             with q.db() as db:jobs=[dict(r) for r in db.execute('SELECT * FROM jobs WHERE created>=? AND created<? ORDER BY created',(start.timestamp(),end.timestamp()))]
-            mapping=Path(os.getenv('CO_STORES_PATH','/var/data/co_stores.json'))
-            if os.getenv('CO_STORES_ZLIB'):
-                stores=json.loads(zlib.decompress(base64.b64decode(os.environ['CO_STORES_ZLIB'])))
-            elif mapping.exists():stores=json.loads(mapping.read_text())
-            else:raise ValueError('Chưa nạp danh mục kho để tạo báo cáo.')
+            stores=store_directory()
+            if not stores:raise ValueError('Chưa nạp danh mục kho để tạo báo cáo.')
             name=render(jobs,stores,start,end,directory)
             reply_image(event.reply_token,base_url.rstrip('/')+'/co-summary-images/'+name)
         except ValueError as e:reply(event.reply_token,str(e))

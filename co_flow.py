@@ -12,7 +12,8 @@ from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message, COPIED_TEXT_VERSION
 from destination_policy import check_destinations, BlockedDestination
-from co_regions import region_label
+from co_regions import region_label, cluster_label, clear_store_cache
+from co_store_directory import write as update_store_directory, status as store_directory_status
 from co_conditions import condition_text, load_conditions
 from confirmation_locks import expire_drafts, lock_notice, unlock, POLICY_VERSION as CONFIRM_LOCK_VERSION
 
@@ -100,7 +101,9 @@ def preview_text(job, successful_co=0, policies=None):
         conditions=condition_text(item,policies)
         conditions=('\n\n'+conditions) if conditions else ''
         prefix=f"{n}. " if len(rows)>1 else ""
-        blocks.append(f"{prefix}{regions[n-1][1]}\n\n"
+        cluster=cluster_label(item)
+        location=regions[n-1][1]+('\n'+cluster if cluster else '')
+        blocks.append(f"{prefix}{location}\n\n"
                       f"Kho xuất: {item.get('source_name',item['source'])}\n"
                       f"Kho nhận: {item.get('destination_name',item['destination'])}\n\n"
                       f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
@@ -613,6 +616,23 @@ def install(app, reply, push, default_users=(), requester_name=None):
         body=request.get_json(silent=True) or {}
         queue.heartbeat(body.get('online') is True)
         return jsonify(ok=True)
+
+    @app.post('/co/worker/store-directory')
+    def store_directory_update():
+        authenticated()
+        if request.content_length and request.content_length>3000000:abort(413)
+        try:
+            with queue.db():
+                info=update_store_directory(request.get_json(silent=True))
+        except ValueError:
+            abort(400)
+        clear_store_cache()
+        return jsonify(ok=True,**info)
+
+    @app.get('/co/worker/store-directory')
+    def store_directory_info():
+        authenticated()
+        return jsonify(**store_directory_status())
 
     @app.get('/co/worker/status')
     def worker_status():
