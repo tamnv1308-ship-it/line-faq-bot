@@ -18,5 +18,5 @@ class RegionTests(unittest.TestCase):
         mapping={'1':{'region':'Vùng Hà Nội +'},'2':{'region':'Vùng Hà Nội +'},'3':{'region':'Vùng Hồ Chí Minh'}}
         with patch('co_regions.stores',return_value=mapping):
             text=preview_text({'id':'abc','payload':json.dumps({'items':rows})})
-        for expected in ('1 cùng vùng','1 khác vùng','1 chưa rõ','XACNHAN abc','HUY abc','Hiệu lực: 1 phút'):
+        for expected in ('📦 3 lệnh','✅ Cùng vùng:','❌ Khác vùng:','Vùng: Chưa rõ','XACNHAN abc','HUY abc','Hiệu lực: 1 phút'):
             self.assertIn(expected,text)

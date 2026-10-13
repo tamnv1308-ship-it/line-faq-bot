@@ -21,6 +21,7 @@ CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
 GATHER_SECONDS = 10
 MAX_BATCH_ROWS = 7
+CONFIRM_LAYOUT_VERSION = 2
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -95,16 +96,23 @@ def preview_text(job, successful_co=0, policies=None):
     rows=items(p)
     regions=[region_label(item) for item in rows]
     if len(rows)>1:
-        counts={kind:sum(state==kind for state,label in regions) for kind in ('same','different','unknown')}
-        blocks.append(f"📦 {len(rows)} lệnh · {counts['same']} cùng vùng · ⚠️ {counts['different']} khác vùng · ❓ {counts['unknown']} chưa rõ")
+        blocks.append(f"📦 {len(rows)} lệnh")
     for n,item in enumerate(rows,1):
-        conditions=condition_text(item,policies)
-        conditions=('\n\n'+conditions) if conditions else ''
-        prefix=f"{n}. " if len(rows)>1 else ""
+        policy=condition_text(item,policies)
+        condition_lines=policy.splitlines()[1:] if policy else []
+        state,label=regions[n-1]
+        if state=='same':
+            condition_lines.append('✅ Cùng vùng:'+label.split(':',1)[1])
+        elif state=='different':
+            condition_lines.append('❌ Khác vùng:'+label.split(':',1)[1])
+        else:
+            condition_lines.append('Vùng: Chưa rõ — '+label.split('—',1)[1].strip())
         cluster=cluster_label(item)
-        location=regions[n-1][1]+('\n'+cluster if cluster else '')
-        blocks.append(f"{prefix}{location}\n\n"
-                      f"Kho xuất: {item.get('source_name',item['source'])}\n"
+        if cluster:
+            condition_lines.append('✅ Cùng cụm:'+cluster.split(':',1)[1])
+        conditions='\n\n📋 Điều kiện\n'+'\n'.join(condition_lines)
+        prefix=f"{n}. " if len(rows)>1 else ""
+        blocks.append(f"{prefix}Kho xuất: {item.get('source_name',item['source'])}\n"
                       f"Kho nhận: {item.get('destination_name',item['destination'])}\n\n"
                       f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
                       f"Số lượng: {item['quantity']}\n"
@@ -641,7 +649,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
             counts={row['state']:row['n'] for row in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
         return jsonify(enabled=True, states=counts, allowed_users=len(users),
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
-                       copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION)
+                       copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION,
+                       confirmation_layout_version=CONFIRM_LAYOUT_VERSION)
 
     @app.post('/co/worker/result')
     def result():

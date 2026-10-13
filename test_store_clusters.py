@@ -101,7 +101,11 @@ class StoreClusterTests(unittest.TestCase):
         row=dict(source='1',destination='2',product='0131491005416',quantity=1,note='QL cho hàng',status='Đã sử dụng',product_name='iPhone')
         job=dict(id='0123456789',owner='user',payload=json.dumps(dict(items=[row,dict(row,destination='3')])))
         text=preview_text(job)
-        self.assertEqual(text.count('⚠️ CÙNG CỤM:'),1)
+        self.assertEqual(text.count('✅ Cùng cụm:'),1)
+        self.assertLess(text.index('Trạng thái: Đã sử dụng'),text.index('📋 Điều kiện'))
+        self.assertLess(text.index('📋 Điều kiện'),text.index('✅ Cùng vùng:'))
+        self.assertLess(text.index('✅ Cùng cụm:'),text.index('📝 Note:'))
+        self.assertNotIn('⚠️ CÙNG CỤM',text)
         self.assertIn('Đã sử dụng',text);self.assertIn('QL cho hàng',text)
         self.assertEqual([x['action']['text'] for x in line_text_messages(text)[-1]['quickReply']['items']],
                          ['XACNHAN 0123456789','HUY 0123456789'])
