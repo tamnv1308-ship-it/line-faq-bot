@@ -1,5 +1,15 @@
 # Tạo CO từ LINE với máy Mac
 
+## Trạng thái MWG và điều khiển Mac (2026-10-13)
+
+Máy chủ kiểm tra cả heartbeat và tiến độ giao diện. Worker gửi `health.state` và `health.progress_age_seconds` trong heartbeat/claim. Heartbeat còn mới nhưng tiến độ không đổi quá 60 giây được hiển thị là bị kẹt và tạm ngừng nhận yêu cầu. Worker cũ chỉ gửi online được hiển thị chưa kiểm tra MWG, không được nhận CO cho đến khi cập nhật. Các trạng thái đăng nhập, tải trang, kết nối lại và đang dừng cũng ngừng nhận. Worker đang xử lý bình thường hoặc giữ bản xác nhận vẫn cho gom yêu cầu theo quy tắc cũ. `!bot status` và `/co/worker/status` hiển thị trạng thái thực và cờ accepting; chỉ huy hiệu online không chứng minh MWG sẵn sàng.
+
+Hủy/hết hạn bản xác nhận vẫn giải phóng bản nhập kể cả MWG chưa sẵn sàng. Không phạt người gửi khi hết hạn trong lúc MWG không hoạt động. Các kết quả chưa rõ vẫn giữ để đối soát, không tạo lại CO.
+
+Trên bản Mac đã cài: `Bat-BOT.command` mở một phiên; `Tat-BOT.command` gửi yêu cầu dừng đúng phiên bằng UUID; `Kiem-tra-BOT.command` hiển thị trạng thái. Dừng chờ thao tác hiện tại, lưu kết quả và đóng Chrome của bot, không đụng Chrome cá nhân. Nếu gửi kết quả đang lỗi mạng thì giữ file kết quả để gửi lại, không tạo lại. Khóa hệ thống được giữ đến khi trình duyệt và heartbeat dừng. Worker chặn mở hai phiên; yêu cầu dừng cũ không tác động phiên mới.
+
+Sau khi chọn thương hiệu, ô trạng thái có riêng tối đa 7 giây để xuất hiện ổn định; tối đa 5 lượt. Khi rảnh, có thể phục hồi ô trống tối đa 5 lượt; không phục hồi bằng reload khi đang giữ bản xác nhận, đang tạo CO hoặc còn kết quả chưa rõ. Giữ quy tắc reload 5 phút khi rảnh. Các file worker trên Mac dùng môi trường riêng; deploy Render không tự thay chương trình Mac đang chạy.
+
 ## Đối soát kết quả bị từ chối (2026-10-13)
 
 API `POST /co/worker/result-status` yêu cầu worker token, nhận ID và lease để đọc trạng thái/kết quả hiện tại cùng cờ so khớp lease. Endpoint không sửa trạng thái, không trả token và không tạo CO. `/co/worker/status` trả đúng cờ bật/tắt, độ mới heartbeat và phiên bản đối soát.

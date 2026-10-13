@@ -1,6 +1,7 @@
 """Confirmation expiry penalties and owner-only unlock selection, within queue transactions."""
 import json
 import math
+from co_health import readiness
 
 POLICY_VERSION = 1
 
@@ -22,7 +23,7 @@ def lock_notice(db, owner, now, owner_id):
 def expire_drafts(db, now, owner_id):
     rows=db.execute("SELECT * FROM jobs WHERE state='draft' AND created<=? - CASE WHEN result='MWG_PREVIEW' AND notified=0 THEN 300 ELSE 60 END ORDER BY created,id",(now,)).fetchall()
     control=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
-    online=control['enabled'] and now-control['heartbeat']<=30
+    online=control['enabled'] and now-control['heartbeat']<=30 and readiness(db,now)['mwg_ready']
     for job in rows:
         payload=json.loads(job['payload'])
         delivered=job['result']=='MWG_PREVIEW' and job['notified']==1

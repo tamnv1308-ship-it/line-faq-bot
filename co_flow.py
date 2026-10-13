@@ -16,6 +16,7 @@ from co_regions import region_label, cluster_condition, clear_store_cache
 from co_store_directory import write as update_store_directory, status as store_directory_status
 from co_conditions import condition_text, load_conditions
 from confirmation_locks import expire_drafts, lock_notice, unlock, POLICY_VERSION as CONFIRM_LOCK_VERSION
+from co_health import readiness, validate_health, READINESS_VERSION
 
 CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
@@ -162,6 +163,9 @@ class Queue:
               CREATE TABLE IF NOT EXISTS co_control (
                 id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL, heartbeat REAL NOT NULL);
               INSERT INTO co_control(id,enabled,heartbeat) VALUES(1,1,0) ON CONFLICT(id) DO NOTHING;
+              CREATE TABLE IF NOT EXISTS co_worker_health (
+                id INTEGER PRIMARY KEY, state TEXT NOT NULL, progress_at REAL NOT NULL);
+              INSERT INTO co_worker_health(id,state,progress_at) VALUES(1,'unverified',0) ON CONFLICT(id) DO NOTHING;
             ''')
 
     @contextmanager
@@ -246,11 +250,18 @@ class Queue:
             return 'Bot đang tạm ngừng nhận yêu cầu CO. Chưa lưu yêu cầu; vui lòng gửi lại khi bot hoạt động.'
         if time.time()-row['heartbeat']>30:
             return 'Bot trên Mac đang offline hoặc mất kết nối. Chưa nhận yêu cầu CO; vui lòng gửi lại khi Mac hoạt động.'
+        health=readiness(db)
+        if not health['mwg_ready']:
+            return 'Bot: '+health['worker_label']+'. Chưa nhận yêu cầu CO; vui lòng gửi lại khi MWG sẵn sàng.'
         return ''
 
-    def heartbeat(self, online=True):
+    def heartbeat(self, online=True, health=None):
+        # Internal callers may explicitly attest ready. HTTP clients must supply health.
+        state,age=validate_health(health if health is not None else {'state':'ready','progress_age_seconds':0})
         with self.db() as db:
             db.execute('UPDATE co_control SET heartbeat=? WHERE id=1',(time.time() if online else 0,))
+            db.execute('UPDATE co_worker_health SET state=?,progress_at=? WHERE id=1',
+                       (state if online else 'stopped',time.time()-age))
 
     def admin(self, command):
         with self.db() as db:
@@ -261,6 +272,9 @@ class Queue:
                 row=db.execute('SELECT heartbeat FROM co_control WHERE id=1').fetchone()
                 if time.time()-row['heartbeat']>30:
                     return 'Chưa bật được: Mac đang offline. Mở bot trên Mac, đăng nhập MWG và nhấn Enter, sau đó gửi !bot on.'
+                health=readiness(db)
+                if not health['mwg_ready']:
+                    return 'Chưa bật được: '+health['worker_label']+'. Kiểm tra MWG trên Mac trước.'
                 db.execute('UPDATE co_control SET enabled=1 WHERE id=1')
                 return 'Đã bật nhận CO. Mac đang kết nối.'
             if command in {'HUY CHO ALL','HUY CHỜ ALL'}:
@@ -273,9 +287,10 @@ class Queue:
             row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
             counts={r['state']:r['n'] for r in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
             online=time.time()-row['heartbeat']<=30
+            health=readiness(db)
             waiting=sum(counts.get(k,0) for k in ('draft','queued','verified_queued','preview_queued'))
             active=sum(counts.get(k,0) for k in ('preview_running','running','submitting'))
-            return (f"Mac: {'online' if online else 'offline'}\nNhận CO: {'BẬT' if row['enabled'] and online else 'TẮT'}\n"
+            return (f"Mac: {'online' if online else 'offline'}\nBOT: {health['worker_label']}\nNhận CO: {'BẬT' if health['accepting'] else 'TẮT'}\n"
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
     def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0):
@@ -434,6 +449,10 @@ class Queue:
     def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False, recovery_protocol=False, page_ready=False):
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
+            if prepared_id:
+                prepared=db.execute('SELECT state FROM jobs WHERE id=?',(prepared_id,)).fetchone()
+                if not prepared or prepared['state'] not in {'draft','queued','verified_queued'}:
+                    return {'release_preview':True}
             if require_online and self.unavailable(db):
                 return None
             # Preserve the existing stale-queue safeguard; confirmation TTL is separate.
@@ -621,9 +640,13 @@ def install(app, reply, push, default_users=(), requester_name=None):
     def claim():
         authenticated()
         body=request.get_json(silent=True) or {}
+        if not isinstance(body,dict):abort(400)
         prepared=body.get('prepared_id')
         if prepared is not None and (not isinstance(prepared,str) or not re.fullmatch(r'[0-9a-f]{10}',prepared)):
             abort(400)
+        if 'health' in body:
+            try:queue.heartbeat(True,body['health'])
+            except ValueError:abort(400)
         return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1,require_online=True,
                                    recovery_protocol=body.get('recovery_protocol')==1,page_ready=body.get('page_ready') is True))
 
@@ -631,7 +654,12 @@ def install(app, reply, push, default_users=(), requester_name=None):
     def heartbeat():
         authenticated()
         body=request.get_json(silent=True) or {}
-        queue.heartbeat(body.get('online') is True)
+        if not isinstance(body,dict):abort(400)
+        health=body.get('health',{'state':'unverified','progress_age_seconds':0})
+        try:
+            validate_health(health)
+            queue.heartbeat(body.get('online') is True,health)
+        except ValueError:abort(400)
         return jsonify(ok=True)
 
     @app.post('/co/worker/store-directory')
@@ -657,7 +685,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
         with queue.db() as db:
             counts={row['state']:row['n'] for row in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
             control=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
-        return jsonify(enabled=bool(control['enabled']), online=time.time()-control['heartbeat']<=30,
+            health=readiness(db)
+        return jsonify(enabled=bool(control['enabled']), **health, readiness_version=READINESS_VERSION,
                        heartbeat_age_seconds=max(0,round(time.time()-control['heartbeat'],1)),
                        states=counts, allowed_users=len(users), result_recovery_version=RESULT_RECOVERY_VERSION,
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
