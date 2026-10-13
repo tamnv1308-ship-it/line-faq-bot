@@ -14,6 +14,7 @@ from transfer_parser import parse_form, parse_request, is_transfer_message, COPI
 from destination_policy import check_destinations, BlockedDestination
 from co_regions import region_label
 from co_conditions import condition_text, load_conditions
+from confirmation_locks import expire_drafts, lock_notice, unlock, POLICY_VERSION as CONFIRM_LOCK_VERSION
 
 CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
@@ -63,6 +64,9 @@ def transfer_key(item):
 class BotUnavailable(ValueError):
     pass
 
+class RequesterLocked(ValueError):
+    pass
+
 ADMIN_CO_COMMANDS={'BOT ON','BOT OFF','BOT STATUS','HUY CHO ALL','HUY CHỜ ALL','LISTADM','KETQUA'}
 
 def admin_command(text):
@@ -71,6 +75,9 @@ def admin_command(text):
 
 def is_lookup(text):
     return bool(re.match(r'^!co(?:\s|$)',text.strip(),re.I))
+
+def is_unlock(text):
+    return bool(re.match(r'^!mokhoa(?:\s|$)',text.strip(),re.I))
 
 HONORS = [(0,'🐣 MẦM NON BỐC HÀNG'),(50,'📦 BÀN TAY VÀNG LÀNG XIN HÀNG'),
           (80,'🛵 SHIPPER KHÔNG CẦN BẰNG LÁI'),(120,'🥷 NINJA ĐỘT NHẬP KHO'),
@@ -99,6 +106,8 @@ def preview_text(job, successful_co=0, policies=None):
                       f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
                       f"Số lượng: {item['quantity']}\n"
                       f"Trạng thái: {item.get('status','Mới')}{conditions}\n\n📝 Note: {item['note']}")
+    if p.get('confirmation_lock_version')==CONFIRM_LOCK_VERSION and job['owner']!=PRIVATE_CO_OWNER:
+        blocks.append('⚠️ Quá hạn xác nhận: lần 1 khóa 1 phút, lần 2 khóa 3 phút, lần 3 chờ Tâm mở khóa.')
     blocks.append(f"XACNHAN {jid}\nHUY {jid}\n\n⏳ Hiệu lực: 1 phút")
     return '\n\n'.join(blocks)
 
@@ -123,6 +132,15 @@ class Queue:
               CREATE TABLE IF NOT EXISTS co_gather_events (
                 event TEXT PRIMARY KEY, job_id TEXT NOT NULL);
               CREATE INDEX IF NOT EXISTS co_gather_events_job ON co_gather_events(job_id);
+              CREATE TABLE IF NOT EXISTS co_confirmation_locks (
+                owner TEXT PRIMARY KEY, name TEXT NOT NULL, strikes INTEGER NOT NULL,
+                locked_until REAL NOT NULL, last_job TEXT NOT NULL, updated REAL NOT NULL);
+              CREATE TABLE IF NOT EXISTS co_unlock_choices (
+                owner TEXT NOT NULL, chat TEXT NOT NULL, position INTEGER NOT NULL,
+                target TEXT NOT NULL, last_job TEXT NOT NULL, issued REAL NOT NULL,
+                PRIMARY KEY(owner,chat,position));
+              CREATE TABLE IF NOT EXISTS co_unlock_events (
+                event TEXT PRIMARY KEY, message TEXT NOT NULL, created REAL NOT NULL);
               CREATE TABLE IF NOT EXISTS co_note_outbox (
                 job_id TEXT PRIMARY KEY, destination TEXT NOT NULL, message TEXT NOT NULL,
                 delivered INTEGER NOT NULL DEFAULT 0);
@@ -253,6 +271,7 @@ class Queue:
         check_destinations(payload)
         if gather_seconds not in (0,GATHER_SECONDS):
             raise ValueError('Thời gian gom yêu cầu chỉ hỗ trợ 0 hoặc 10 giây.')
+        self.expire_confirmations()
         with self.db() as db:
             now = time.time()
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
@@ -260,6 +279,9 @@ class Queue:
                 old=db.execute('SELECT j.* FROM jobs j JOIN co_gather_events e ON e.job_id=j.id WHERE e.event=?',(event,)).fetchone()
             if old:
                 return dict(old)
+            locked=lock_notice(db,owner,now,PRIVATE_CO_OWNER)
+            if locked:
+                raise RequesterLocked(locked)
             if db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',(hashlib.sha256(event.encode()).hexdigest(),)).fetchone():
                 raise DuplicateRequest('Tin nhắn này đã được xử lý và hết thời gian lưu lịch sử; không tạo lại.')
             if require_online:
@@ -328,12 +350,15 @@ class Queue:
 
     def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False):
         with self.db() as db:
+            expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
             if require_online and not cancel:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
             job = db.execute('SELECT * FROM jobs WHERE id=?'+('' if owner==PRIVATE_CO_OWNER else ' AND owner=? AND chat=?'),(jid,) if owner==PRIVATE_CO_OWNER else (jid,owner,chat)).fetchone()
             if not job:
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
+            if job['state']=='expired':
+                return 'Xác nhận đã hết hạn. Yêu cầu đã tự hủy; chưa tạo CO.\n'+lock_notice(db,job['owner'],time.time(),PRIVATE_CO_OWNER)
             if cancel and job['state'] in {'queued','preview_queued','verified_queued'}:
                 db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=?",(time.time(),jid))
                 return f'Đã hủy yêu cầu chờ {jid}; Mac sẽ không tạo yêu cầu này.'
@@ -343,9 +368,6 @@ class Queue:
                 return 'Mac đang kiểm tra tên sản phẩm trên MWG. Chưa tạo CO; chờ bản xác nhận có tên sản phẩm.'
             if job['state'] != 'draft':
                 return 'Yêu cầu đã được xử lý hoặc hủy; không tạo thêm bản trùng.'
-            if draft_expired(job,time.time()):
-                db.execute("UPDATE jobs SET state='expired' WHERE id=?",(jid,))
-                return 'Xác nhận đã hết hạn. Vui lòng gửi lại form.'
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
             if not cancel and reply_token and job['chat']==chat:
@@ -360,8 +382,7 @@ class Queue:
             if require_online and not cancel:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' AND created<=? - CASE WHEN result='MWG_PREVIEW' AND notified=0 THEN 300 ELSE 60 END",
-                       (now,owner,owner,chat,now))
+            expire_drafts(db,now,PRIVATE_CO_OWNER)
             jobs = db.execute("SELECT id,payload FROM jobs WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' ORDER BY created,id",
                               (owner,owner,chat)).fetchall()
             if not jobs:
@@ -401,9 +422,9 @@ class Queue:
 
     def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False, recovery_protocol=False, page_ready=False):
         with self.db() as db:
+            expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
             if require_online and self.unavailable(db):
                 return None
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state='draft' AND created<=? - CASE WHEN result='MWG_PREVIEW' AND notified=0 THEN 300 ELSE 60 END",(time.time(),time.time()))
             # Preserve the existing stale-queue safeguard; confirmation TTL is separate.
             db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-300))
             # Never automatically replay an interrupted browser operation.
@@ -427,8 +448,6 @@ class Queue:
                 prepared=db.execute('SELECT * FROM jobs WHERE id=?',(prepared_id,)).fetchone()
                 if prepared and prepared['state']=='draft' and not draft_expired(prepared,time.time()):
                     return None  # Keep the imported MWG row until its owner confirms/cancels.
-                if prepared and prepared['state']=='draft':
-                    db.execute("UPDATE jobs SET state='expired',updated=? WHERE id=?",(time.time(),prepared_id))
                 if not prepared or prepared['state'] not in {'verified_queued','queued'}:
                     return {'release_preview':True}
                 job=prepared
@@ -466,6 +485,7 @@ class Queue:
                         item.update(source_name=detail['source_name'].strip(),destination_name=detail['destination_name'].strip())
                 if 'items' in payload:
                     payload['product_name']='MWG_BATCH_READY'
+                payload['confirmation_lock_version']=CONFIRM_LOCK_VERSION
                 now=time.time()
                 db.execute("UPDATE jobs SET state='draft',payload=?,result='MWG_PREVIEW',created=?,updated=?,notified=0 WHERE id=?",
                            (json.dumps(payload,ensure_ascii=False),now,now,jid))
@@ -521,9 +541,19 @@ class Queue:
                     db.execute('UPDATE co_note_outbox SET delivered=1 WHERE job_id=?',(jid,))
             db.execute('INSERT INTO co_note_reads(event) VALUES(?)',(event_id,))
 
+    def expire_confirmations(self):
+        with self.db() as db:
+            expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
+
+    def unlock_requester(self, owner, chat, event, selection=''):
+        with self.db() as db:
+            expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
+            return unlock(db,owner,chat,event,selection,time.time(),PRIVATE_CO_OWNER)
+
     def notifications(self):
         with self.db() as db:
-            return [dict(x) for x in db.execute("SELECT * FROM jobs WHERE (state IN ('succeeded','failed','unknown') OR (state='draft' AND result='MWG_PREVIEW')) AND notified=0")]
+            expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
+            return [dict(x) for x in db.execute("SELECT * FROM jobs WHERE (state IN ('succeeded','failed','unknown') OR (state='draft' AND result='MWG_PREVIEW') OR (state='expired' AND result LIKE 'Hết hạn xác nhận%')) AND notified=0")]
 
     def mark_notified(self, jid, state=None):
         with self.db() as db:
@@ -591,7 +621,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             counts={row['state']:row['n'] for row in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
         return jsonify(enabled=True, states=counts, allowed_users=len(users),
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
-                       copied_text_version=COPIED_TEXT_VERSION)
+                       copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION)
 
     @app.post('/co/worker/result')
     def result():
@@ -619,7 +649,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 'unknown':'Chưa xác định được kết quả. Cần kiểm tra MWG trước khi tạo lại'}
         # Deliver fresh replies before retrying old pushes (which may be quota-blocked).
         for job in queue.notifications():
-            text=(queue.confirmation(job) if job['state']=='draft' else result_text(job))
+            text=(queue.confirmation(job) if job['state']=='draft' else job['result'] if job['state']=='expired' else result_text(job))
             pending=queue.take_preview_reply(job['id'])
             replied=False
             if pending and time.time()-pending['received']<55:
@@ -657,6 +687,16 @@ def install(app, reply, push, default_users=(), requester_name=None):
 
     def handle(event):
         text=event.message.text.strip()
+        if is_unlock(text):
+            owner=getattr(event.source,'user_id',None)
+            chat=getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None) or owner
+            if owner!=PRIVATE_CO_OWNER:
+                reply(event.reply_token,'Chỉ Tâm 258330 Apple được xem danh sách và mở khóa yêu cầu CO.');return True
+            if not queue:
+                reply(event.reply_token,'Chức năng CO chưa được cấu hình.');return True
+            event_id=getattr(event,'webhook_event_id',None) or 'message:'+event.message.id
+            selection=text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1))>1 else ''
+            reply(event.reply_token,queue.unlock_requester(owner,chat,event_id,selection));return True
         if is_lookup(text):
             owner=getattr(event.source,'user_id',None)
             if not owner:
@@ -680,7 +720,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             if adm in {'HUY CHO ALL','HUY CHỜ ALL'} and owner!=PRIVATE_CO_OWNER:
                 reply(event.reply_token,'Chỉ chủ bot được hủy yêu cầu của người khác.'); return True
             if adm=='LISTADM':
-                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!ketqua — lấy tối đa 10 CO chưa báo trong nhóm NOTE\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
+                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!ketqua — lấy tối đa 10 CO chưa báo trong nhóm NOTE\n!mokhoa — danh sách khóa CO (chỉ Tâm)\n!mokhoa <số> — mở khóa và reset lần quá hạn (chỉ Tâm)\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
                 return True
             if not enabled:
                 reply(event.reply_token,'Chức năng CO chưa được cấu hình.'); return True
@@ -749,6 +789,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                     message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True)
                     if message is not None:
                         reply(event.reply_token,message)
+        except RequesterLocked as error:
+            reply(event.reply_token,str(error))
         except BlockedDestination as error:
             reply(event.reply_token,str(error))
         except DuplicateRequest as error:

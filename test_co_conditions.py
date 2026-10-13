@@ -69,7 +69,7 @@ class ConfirmationExpiryTests(unittest.TestCase):
         with patch('co_flow.time.time',return_value=1140):
             self.assertEqual(self.q.claim(True,prepared_id=jid),{'release_preview':True})
             self.assertEqual(self.q.claim(True)['id'],next_job['id'])
-            self.assertIn('đã được xử lý',self.q.confirm(jid,'o','c'))
+            self.assertIn('hết hạn',self.q.confirm(jid,'o','c'))
 
     def test_confirmed_job_survives_confirmation_deadline(self):
         with patch('co_flow.time.time',return_value=1000):

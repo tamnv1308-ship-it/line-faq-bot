@@ -1,5 +1,12 @@
 # Tạo CO từ LINE với máy Mac
 
+## Quá hạn xác nhận và mở khóa (2026-10-13)
+
+Hiệu lực là 1 phút từ khi LINE nhận bản xác nhận. Quá hạn thì yêu cầu tự hủy trước khi tạo CO và Mac chuyển sang yêu cầu tiếp theo. Với bản xác nhận mới đã báo quy tắc, mỗi lần quá hạn tính một lần cho người gửi (một bản gộp nhiều dòng vẫn tính một lần): lần 1 khóa nhận yêu cầu mới 1 phút; lần 2 khóa 3 phút; lần 3 khóa đến khi chủ bot Tâm mở lại. Hết thời gian khóa 1/3 phút không reset số lần. Tâm được miễn khóa. Không tính vi phạm cho bản chưa gửi được, bản trước khi áp dụng quy tắc, người chủ động Hủy, hoặc khi bot đang offline/tạm dừng lúc kiểm tra hết hạn.
+
+Chỉ User ID của chủ bot Tâm dùng được `!mokhoa` để xem danh sách hiện bị khóa, rồi `!mokhoa 2` để mở người ở số 2. Lựa chọn có hiệu lực 5 phút và gắn với đúng sự kiện khóa; danh sách thay đổi không làm số thứ tự trỏ sang người khác. Mở khóa reset số lần về 0. Danh sách tối đa 50 người; sau khi mở, gửi `!mokhoa` để làm mới. Webhook gửi lại không mở thêm người khác. Xác nhận đúng hạn và yêu cầu đã bắt đầu tạo CO được xử lý theo quy tắc hiện tại.
+
+
 ## Gom tin nhắn trong 10 giây (2026-10-12)
 
 Mặc định `CO_GATHER_SECONDS=10`: từ lúc nhận tin đầu, bot đợi một cửa sổ cố định 10 giây và gom các tin hợp lệ của cùng người gửi, cùng cuộc chat, cùng trạng thái sản phẩm. Tin tiếp theo không kéo dài cửa sổ. Mỗi file tối đa 7 dòng; một tin có nhiều dòng được giữ nguyên, không chia nhỏ để lấp chỗ trống. Tin vượt giới hạn hoặc đến sau cửa sổ sẽ thành yêu cầu riêng. Có thể đặt `CO_GATHER_SECONDS=0` để trở lại xử lý từng tin ngay.
