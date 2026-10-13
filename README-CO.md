@@ -1,5 +1,11 @@
 # Tạo CO từ LINE với máy Mac
 
+## Đối soát kết quả bị từ chối (2026-10-13)
+
+API `POST /co/worker/result-status` yêu cầu worker token, nhận ID và lease để đọc trạng thái/kết quả hiện tại cùng cờ so khớp lease. Endpoint không sửa trạng thái, không trả token và không tạo CO. `/co/worker/status` trả đúng cờ bật/tắt, độ mới heartbeat và phiên bản đối soát.
+
+Bản Mac đang cài phân biệt lỗi mạng có thể thử lại với lỗi HTTP 409. Sau 409, chỉ lỗi được ghi rõ xảy ra trước bước tạo CO mới được lưu vào `.co-mac/result-conflicts/` và giải phóng nếu máy chủ đã kết thúc yêu cầu ở trạng thái failed/cancelled/expired, không có mã CO. Kết quả thành công, chưa rõ, đang tạo hoặc thiếu bằng chứng được giữ nguyên để đối soát; không gửi lại thao tác tạo. Các lỗi HTTP cố định không còn bị gửi lặp vô hạn. Bản Mac dùng thư mục và môi trường riêng; cập nhật phần máy chủ không tự thay worker đang mở trên Mac.
+
 ## Danh mục Shop và cảnh báo cùng cụm (2026-10-13)
 
 Danh mục được cập nhật từ sheet Chi Tiết và Cụm của file người dùng cung cấp. Chi Tiết dùng mã chi nhánh cột C, tên kho D, vùng A, phường H, tỉnh mới I và giữ tỉnh cũ L để truy vết. Bỏ qua các vùng ngoài 8 vùng hiện có, gồm An Khang/AvaWorld. Sheet Cụm: MST cột C và ST Base cột F đều có quan hệ trực tiếp với cụm cột E. Chữ hoa/thường trong tên cụm được chuẩn hóa; một base có thể tham gia nhiều quan hệ, không suy diễn ghép cụm bắc cầu.

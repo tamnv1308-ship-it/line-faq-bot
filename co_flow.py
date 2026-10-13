@@ -23,6 +23,7 @@ GATHER_SECONDS = 10
 MAX_BATCH_ROWS = 7
 CONFIRM_LAYOUT_VERSION = 3
 HONORS_VERSION = 2
+RESULT_RECOVERY_VERSION = 1
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -521,6 +522,15 @@ class Queue:
                                (jid,NOTE_GROUP,message))
             return True
 
+    def result_status(self, jid, lease):
+        """Read-only reconciliation; never change a terminal result or lease."""
+        with self.db() as db:
+            job=db.execute('SELECT state,result,lease FROM jobs WHERE id=?',(jid,)).fetchone()
+            if not job:
+                return {'found':False}
+            return {'found':True,'state':job['state'],'result':job['result'] or '',
+                    'lease_matches':bool(job['lease']) and hmac.compare_digest(job['lease'],lease)}
+
     def reply_notes(self, event_id, send):
         # Serialize reads so simultaneous ADM commands cannot select the same rows.
         with self.db() as db:
@@ -646,10 +656,23 @@ def install(app, reply, push, default_users=(), requester_name=None):
         authenticated()
         with queue.db() as db:
             counts={row['state']:row['n'] for row in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
-        return jsonify(enabled=True, states=counts, allowed_users=len(users),
+            control=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
+        return jsonify(enabled=bool(control['enabled']), online=time.time()-control['heartbeat']<=30,
+                       heartbeat_age_seconds=max(0,round(time.time()-control['heartbeat'],1)),
+                       states=counts, allowed_users=len(users), result_recovery_version=RESULT_RECOVERY_VERSION,
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
                        copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION,
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION)
+
+    @app.post('/co/worker/result-status')
+    def result_status():
+        authenticated()
+        data=request.get_json(silent=True)
+        if (not isinstance(data,dict) or not isinstance(data.get('id'),str)
+                or not re.fullmatch(r'[0-9a-f]{10}',data['id'])
+                or not isinstance(data.get('lease'),str) or not 1<=len(data['lease'])<=200):
+            abort(400)
+        return jsonify(queue.result_status(data['id'],data['lease']))
 
     @app.post('/co/worker/result')
     def result():
