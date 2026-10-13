@@ -4,7 +4,7 @@
 
 Danh mục được cập nhật từ sheet Chi Tiết và Cụm của file người dùng cung cấp. Chi Tiết dùng mã chi nhánh cột C, tên kho D, vùng A, phường H, tỉnh mới I và giữ tỉnh cũ L để truy vết. Bỏ qua các vùng ngoài 8 vùng hiện có, gồm An Khang/AvaWorld. Sheet Cụm: MST cột C và ST Base cột F đều có quan hệ trực tiếp với cụm cột E. Chữ hoa/thường trong tên cụm được chuẩn hóa; một base có thể tham gia nhiều quan hệ, không suy diễn ghép cụm bắc cầu.
 
-Nếu kho xuất và kho nhận có ít nhất một cụm chung, bản xác nhận thêm dòng `✅ Cùng cụm: <tên cụm>` trong phần Điều kiện, bên dưới thông tin sản phẩm/trạng thái. Cùng vùng dùng ✅, Khác vùng dùng ❌; dữ liệu chưa rõ được ghi rõ thay vì suy diễn. Đây là thông tin cảnh báo để người gửi xem trước, không chặn tạo CO hay sửa Note/Excel. Tổng kết dùng cùng danh mục mới.
+Phần Điều kiện luôn hiển thị Cụm: `✅ Cùng cụm: <tên cụm>` khi có cụm chung, `❌ Khác cụm` khi hai kho có dữ liệu nhưng không chung cụm. Nếu thiếu danh mục, ghi `❌ Cụm: Chưa có dữ liệu` thay vì kết luận khác cụm. Cùng vùng dùng ✅, Khác vùng dùng ❌; dữ liệu chưa rõ được ghi rõ thay vì suy diễn. Đây là thông tin cảnh báo để người gửi xem trước, không chặn tạo CO hay sửa Note/Excel. Tổng kết dùng cùng danh mục mới.
 
 Dữ liệu shop không đưa vào GitHub công khai. `import_store_directory.py --file <file.xlsx> --output <private.json>` chỉ đọc workbook và xuất JSON chuẩn hóa. `POST /co/worker/store-directory` yêu cầu worker authentication, kiểm tra giới hạn/cấu trúc và lưu nguyên tử trên persistent disk, giữ một bản trước để khôi phục. `GET` cùng đường dẫn chỉ trả nguồn, checksum và số lượng; không trả danh sách. File override được ưu tiên hơn cấu hình ZLIB cũ và tự cập nhật cache khi thay đổi, nên không cần khởi động lại Mac.
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message, COPIED_TEXT_VERSION
 from destination_policy import check_destinations, BlockedDestination
-from co_regions import region_label, cluster_label, clear_store_cache
+from co_regions import region_label, cluster_condition, clear_store_cache
 from co_store_directory import write as update_store_directory, status as store_directory_status
 from co_conditions import condition_text, load_conditions
 from confirmation_locks import expire_drafts, lock_notice, unlock, POLICY_VERSION as CONFIRM_LOCK_VERSION
@@ -21,7 +21,7 @@ CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
 GATHER_SECONDS = 10
 MAX_BATCH_ROWS = 7
-CONFIRM_LAYOUT_VERSION = 2
+CONFIRM_LAYOUT_VERSION = 3
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -107,9 +107,7 @@ def preview_text(job, successful_co=0, policies=None):
             condition_lines.append('❌ Khác vùng:'+label.split(':',1)[1])
         else:
             condition_lines.append('Vùng: Chưa rõ — '+label.split('—',1)[1].strip())
-        cluster=cluster_label(item)
-        if cluster:
-            condition_lines.append('✅ Cùng cụm:'+cluster.split(':',1)[1])
+        condition_lines.append(cluster_condition(item))
         conditions='\n\n📋 Điều kiện\n'+'\n'.join(condition_lines)
         prefix=f"{n}. " if len(rows)>1 else ""
         blocks.append(f"{prefix}Kho xuất: {item.get('source_name',item['source'])}\n"

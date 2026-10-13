@@ -46,6 +46,18 @@ def cluster_label(item):
     shared=sorted(source.keys() & destination.keys())
     return '⚠️ CÙNG CỤM: '+', '.join(source[g]['name'] for g in shared) if shared else ''
 
+def cluster_condition(item):
+    mapping=stores()
+    source={g['id']:g for g in mapping.get(str(int(item['source'])),{}).get('clusters',[])}
+    destination={g['id']:g for g in mapping.get(str(int(item['destination'])),{}).get('clusters',[])}
+    if not source or not destination:
+        missing=', '.join(label for label,groups in (('kho xuất',source),('kho nhận',destination)) if not groups)
+        return '❌ Cụm: Chưa có dữ liệu '+missing
+    shared=sorted(source.keys() & destination.keys())
+    if shared:
+        return '✅ Cùng cụm: '+', '.join(source[g]['name'] for g in shared)
+    return '❌ Khác cụm'
+
 def region(code):
     value = stores().get(str(int(code)), {}).get('region', '').strip()
     if value.startswith('Vùng '):

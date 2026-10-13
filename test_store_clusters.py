@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from co_flow import preview_text,install
-from co_regions import stores,region_label,cluster_label,clear_store_cache
+from co_regions import stores,region_label,cluster_label,cluster_condition,clear_store_cache
 from co_results import line_text_messages
 from co_store_directory import validate,write,status,override_path
 from import_store_directory import extract
@@ -54,6 +54,9 @@ class StoreClusterTests(unittest.TestCase):
         write(directory())
         for destination in ('3','999'):
             self.assertEqual(cluster_label(dict(source='1',destination=destination)),'')
+        self.assertEqual(cluster_condition(dict(source='1',destination='2')),'✅ Cùng cụm: Cụm 2')
+        self.assertEqual(cluster_condition(dict(source='1',destination='3')),'❌ Khác cụm')
+        self.assertIn('Chưa có dữ liệu kho nhận',cluster_condition(dict(source='1',destination='999')))
 
     def test_base_references_and_no_transitive_cluster_merge(self):
         rows=extract([detail(1),detail(2)], [cluster(1,2,'Cụm 2'),cluster(2,3,'Cụm 3')])
@@ -102,6 +105,7 @@ class StoreClusterTests(unittest.TestCase):
         job=dict(id='0123456789',owner='user',payload=json.dumps(dict(items=[row,dict(row,destination='3')])))
         text=preview_text(job)
         self.assertEqual(text.count('✅ Cùng cụm:'),1)
+        self.assertEqual(text.count('❌ Khác cụm'),1)
         self.assertLess(text.index('Trạng thái: Đã sử dụng'),text.index('📋 Điều kiện'))
         self.assertLess(text.index('📋 Điều kiện'),text.index('✅ Cùng vùng:'))
         self.assertLess(text.index('✅ Cùng cụm:'),text.index('📝 Note:'))
