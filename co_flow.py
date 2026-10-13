@@ -22,6 +22,7 @@ PREVIEW_DELIVERY_SECONDS = 300
 GATHER_SECONDS = 10
 MAX_BATCH_ROWS = 7
 CONFIRM_LAYOUT_VERSION = 3
+HONORS_VERSION = 2
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -81,10 +82,10 @@ def is_lookup(text):
 def is_unlock(text):
     return bool(re.match(r'^!mokhoa(?:\s|$)',text.strip(),re.I))
 
-HONORS = [(0,'🐣 MẦM NON BỐC HÀNG'),(50,'📦 BÀN TAY VÀNG LÀNG XIN HÀNG'),
-          (80,'🛵 SHIPPER KHÔNG CẦN BẰNG LÁI'),(120,'🥷 NINJA ĐỘT NHẬP KHO'),
-          (150,'🌪️ ĐI TỚI ĐÂU HẾT HÀNG TỚI ĐÓ'),(200,'👑 ÔNG TRÙM BỐC CẢ KHO'),
-          (250,'🐉 KHO CÒN THỞ LÀ CÒN CHUYỂN')]
+HONORS = [(0,'🐣 BÉ TẬP XIN HÀNG'),(50,'📞 ALO LÀ XIN HÀNG'),
+          (80,'⚡ CHIẾN THẦN CHỐT CO'),(120,'🧙 PHÁP SƯ TRIỆU HỒI HÀNG'),
+          (150,'🌪️ LỐC XOÁY QUÉT KHO'),(200,'👑 ÔNG HOÀNG VÉT TỒN'),
+          (250,'🐉 KHO HẾT HÀNG, EM CHƯA HẾT HĂNG')]
 
 def honor(count):
     return next(label for minimum,label in reversed(HONORS) if count>=minimum)
@@ -648,7 +649,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
         return jsonify(enabled=True, states=counts, allowed_users=len(users),
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
                        copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION,
-                       confirmation_layout_version=CONFIRM_LAYOUT_VERSION)
+                       confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION)
 
     @app.post('/co/worker/result')
     def result():

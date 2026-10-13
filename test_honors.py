@@ -17,10 +17,10 @@ class Honors(unittest.TestCase):
      updated=time.time() if i!=49 else time.time()-9*86400
      db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated,result) VALUES(?,?,?,?,?,?,?,?,?)',(str(i),str(i),owner,'other',json.dumps(p),'succeeded',updated,updated,result))
    text=q.confirmation(job)
-   self.assertIn('MẦM NON',text) # 49 distinct current owner codes
+   self.assertIn('BÉ TẬP XIN HÀNG',text) # 49 distinct current owner codes
    with q.db() as db:db.execute('UPDATE jobs SET updated=? WHERE id=?',(time.time(),'49'))
    text=q.confirmation(job)
-   self.assertIn('BÀN TAY VÀNG',text)
+   self.assertIn('ALO LÀ XIN HÀNG',text)
    self.assertIn('Mời Tâm xác nhận',text)
    self.assertNotIn('XÁC NHẬN TẠO CO',text)
    actions=line_text_messages(text)[-1]['quickReply']['items']
