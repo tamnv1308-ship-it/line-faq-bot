@@ -1,6 +1,7 @@
 """Shared batch wire format and customer-facing results (no product IDs)."""
 import json
 import re
+from transfer_parser import duplicate_notice
 
 def message_chunks(text):
     chunks=[]; current=[]; size=0
@@ -50,6 +51,8 @@ def result_text(job):
         rows=[{'co':job['result'] if success else '', 'error':'' if success else (job['result'] or 'Chưa có kết quả.')} for _ in data]
     count=sum(bool(row['co']) for row in rows)
     blocks=[f"Kết quả CO — {job['id']}: {count}/{len(data)} có mã CO"]
+    skipped=duplicate_notice(payload.get('skipped_duplicates',[]))
+    if skipped:blocks.append(skipped)
     for n,(item,row) in enumerate(zip(data,rows),1):
         icon='✅' if row['co'] and not row['error'] else '⚠️' if row['co'] or job['state']=='unknown' else '❌'
         block=f"{icon} {n}. {item['source']} → {item['destination']}\n{item.get('product_name','Chưa lấy được tên sản phẩm từ MWG')}\nSố lượng: {item['quantity']}"

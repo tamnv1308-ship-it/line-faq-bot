@@ -23,6 +23,44 @@ COPY_FORMATTING = str.maketrans({
     '\u00a0': ' ', '\u202f': ' ',
 })
 COPIED_TEXT_VERSION = 1
+DUPLICATE_FILTER_VERSION = 1
+
+
+def transfer_key(item):
+    return (str(int(item['source'])),str(int(item['destination'])),item['product'].strip(),int(item['quantity']))
+
+
+def deduplicate_request(payload, existing=None):
+    """Keep the first unique row; preserve its status/note without summing quantity."""
+    existing=existing or {}
+    seen=set();kept=[];skipped=list(payload.get('skipped_duplicates',[]))
+    for row in payload.get('items') or [payload]:
+        key=transfer_key(row)
+        if key in seen or key in existing:
+            dropped={name:row[name] for name in ('source','destination','product','quantity')}
+            if key in existing:dropped['existing_job']=existing[key]
+            skipped.append(dropped)
+        else:
+            kept.append(row);seen.add(key)
+    if not kept:return None,skipped
+    result=dict(payload)
+    if 'items' in payload:result['items']=kept
+    if skipped:result['skipped_duplicates']=skipped
+    return result,skipped
+
+
+def duplicate_notice(skipped):
+    if not skipped:return ''
+    # Repeat copies share one display entry; the count still includes every copy.
+    unique={}
+    for row in skipped:
+        unique.setdefault((transfer_key(row),row.get('existing_job')),row)
+    lines=[f'⚠️ Đã bỏ qua {len(skipped)} dòng trùng:']
+    for row in list(unique.values())[:7]:
+        reason='trùng yêu cầu '+row['existing_job'] if row.get('existing_job') else 'trùng trong tin nhắn'
+        lines.append(f"• {row['source']} → {row['destination']} | MSP {row['product']} | SL {row['quantity']} ({reason})")
+    if len(unique)>7:lines.append(f'… và {len(unique)-7} nhóm dòng trùng khác.')
+    return '\n'.join(lines)
 
 def clean_copied_text(text):
     # Remove copy/paste markers before matching labels, keeping Vietnamese
@@ -185,7 +223,5 @@ def parse_request(text):
         return items[0]
     if len({item['status'] for item in items})!=1:
         raise ValueError('Các dòng trong cùng file phải cùng trạng thái sản phẩm. Gửi riêng các trạng thái khác nhau.')
-    identities=[(str(int(item['source'])),str(int(item['destination'])),item['product'],item['quantity']) for item in items]
-    if len(set(identities))!=len(identities):
-        raise ValueError('Có dòng trùng kho xuất, kho nhận, mã sản phẩm và số lượng. Bỏ dòng trùng rồi gửi lại.')
-    return {'items':items,'status':items[0]['status'],'batch_version':1}
+    payload,_=deduplicate_request({'items':items,'status':items[0]['status'],'batch_version':1})
+    return payload

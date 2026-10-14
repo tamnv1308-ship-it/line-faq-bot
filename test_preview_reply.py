@@ -92,4 +92,33 @@ class ReplyTests(unittest.TestCase):
         with self.q.db() as db:db.execute('UPDATE preview_replies SET received=received-60')
         self.notify();self.assertEqual(self.replies,[]);self.assertEqual(len(self.pushes),1)
 
+    def test_duplicate_batch_replies_with_warning_and_confirms_remaining_rows(self):
+        from co_results import line_text_messages,items
+        event=self.event();row=event.message.text
+        event.message.text=row+'\n'+row+'\n'+row.replace('123\nKho nhận','124\nKho nhận')
+        self.handle(event)
+        work=self.q.claim(True,batch_protocol=True)
+        self.assertEqual([r['source'] for r in items(work['payload'])],['123','124'])
+        self.q.update(work['id'],work['lease'],'preview_ready','["Phone A","Phone B"]')
+        self.notify()
+        text=self.replies[0][1]
+        self.assertIn('Đã bỏ qua 1 dòng trùng',text)
+        self.assertIn('Chỉ xác nhận 2 dòng',text)
+        self.assertEqual(len(line_text_messages(text)[-1]['quickReply']['items']),2)
+        self.assertIsNone(self.q.claim(True,work['id'],True))
+        event.message.text='XACNHAN '+work['id'];event.reply_token='confirm-token'
+        self.handle(event)
+        create=self.q.claim(True,work['id'],True)
+        self.assertEqual(create['mode'],'create')
+        self.assertEqual(len(items(create['payload'])),2)
+
+    def test_all_existing_duplicates_reply_without_adding_job(self):
+        first=self.event();self.handle(first)
+        duplicate=self.event();duplicate.webhook_event_id='duplicate';duplicate.reply_token='duplicate-token'
+        self.handle(duplicate)
+        self.assertEqual(self.replies[-1][0],'duplicate-token')
+        self.assertIn('Không còn dòng mới',self.replies[-1][1])
+        with self.q.db() as db:self.assertEqual(db.execute('SELECT COUNT(*) AS n FROM jobs').fetchone()['n'],1)
+        self.assertEqual(self.q.take_preview_reply(self.q.claim(True)['id'])['token'],'test-token')
+
 if __name__=='__main__':unittest.main()

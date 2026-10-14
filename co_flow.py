@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message, COPIED_TEXT_VERSION
+from transfer_parser import transfer_key, deduplicate_request, duplicate_notice, DUPLICATE_FILTER_VERSION
 from destination_policy import check_destinations, BlockedDestination
 from co_regions import region_label, cluster_condition, clear_store_cache
 from co_store_directory import write as update_store_directory, status as store_directory_status
@@ -63,9 +64,6 @@ class DuplicateRequest(ValueError):
 def stock_key(item):
     return (str(int(item["source"])),item["product"].strip())
 
-def transfer_key(item):
-    return (str(int(item['source'])),str(int(item['destination'])),item['product'].strip(),int(item['quantity']))
-
 class BotUnavailable(ValueError):
     pass
 
@@ -100,6 +98,9 @@ def preview_text(job, successful_co=0, policies=None):
     regions=[region_label(item) for item in rows]
     if len(rows)>1:
         blocks.append(f"📦 {len(rows)} lệnh")
+    skipped=duplicate_notice(p.get('skipped_duplicates',[]))
+    if skipped:
+        blocks.append(skipped+f'\nChỉ xác nhận {len(rows)} dòng còn lại bên dưới.')
     for n,item in enumerate(rows,1):
         policy=condition_text(item,policies)
         condition_lines=policy.splitlines()[1:] if policy else []
@@ -309,29 +310,29 @@ class Queue:
             if locked:
                 raise RequesterLocked(locked)
             if db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',(hashlib.sha256(event.encode()).hexdigest(),)).fetchone():
-                raise DuplicateRequest('Tin nhắn này đã được xử lý và hết thời gian lưu lịch sử; không tạo lại.')
+                raise DuplicateRequest('Tin nhắn này đã được xử lý trước đó; không tạo lại.')
             if require_online:
                 reason=self.unavailable(db)
                 if reason:raise BotUnavailable(reason)
             if check_duplicates:
-                incoming_stocks={stock_key(item) for item in items(payload)}
-                for uncertain in db.execute("SELECT id,payload FROM jobs WHERE state='unknown'").fetchall():
-                    if incoming_stocks & {stock_key(item) for item in items(json.loads(uncertain['payload']))}:
-                        raise DuplicateRequest('Kho xuất và mã sản phẩm đang có yêu cầu chưa rõ kết quả '+uncertain['id']+'. Cần đối soát MWG trước khi tạo tiếp; chưa nhận yêu cầu này.')
-                incoming=[transfer_key(item) for item in items(payload)]
-                if len(set(incoming))!=len(incoming):
-                    raise DuplicateRequest('Có dòng trùng cả kho xuất, kho nhận, mã sản phẩm và số lượng trong tin nhắn. Chưa nhận yêu cầu này.')
                 candidates=db.execute("SELECT id,payload,state,created,result,notified FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
-                clashes=[]
+                existing={}
                 for candidate in candidates:
                     if (candidate['state']=='draft' and draft_expired(candidate,now)) or (candidate['state'] in {'queued','verified_queued','preview_queued'} and candidate['created']<now-300):
                         continue
-                    existing={transfer_key(item) for item in items(json.loads(candidate['payload']))}
-                    for number,key in enumerate(incoming,1):
-                        if key in existing:
-                            clashes.append(f"Dòng {number} trùng yêu cầu {candidate['id']}")
-                if clashes:
-                    raise DuplicateRequest('Cảnh báo tạo trùng: cùng kho xuất, kho nhận, mã sản phẩm và số lượng với yêu cầu đang chờ, đang xử lý hoặc chưa rõ kết quả.\n'+'\n'.join(clashes)+'\nChưa nhận tin nhắn này; bỏ dòng trùng rồi gửi lại các dòng còn lại.')
+                    for item in items(json.loads(candidate['payload'])):
+                        existing.setdefault(transfer_key(item),candidate['id'])
+                payload,skipped=deduplicate_request(payload,existing)
+                if payload is None:
+                    # Commit the handled event without creating a job. A webhook
+                    # redelivery must not resurrect it after the original CO finishes.
+                    db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',
+                               (hashlib.sha256(event.encode()).hexdigest(),))
+                    return {'id':None,'state':'skipped','result':duplicate_notice(skipped)+'\nKhông còn dòng mới để xử lý; không thêm yêu cầu vào hàng chờ.'}
+                incoming_stocks={stock_key(item) for item in items(payload)}
+                for uncertain in (row for row in candidates if row['state']=='unknown'):
+                    if incoming_stocks & {stock_key(item) for item in items(json.loads(uncertain['payload']))}:
+                        raise DuplicateRequest('Kho xuất và mã sản phẩm đang có yêu cầu chưa rõ kết quả '+uncertain['id']+'. Cần đối soát MWG trước khi tạo tiếp; chưa nhận yêu cầu này.')
             # Only the same owner may approve/cancel the combined rows. Never
             # append to a claimed preview or extend the first message's deadline.
             if check_product and gather_seconds:
@@ -344,6 +345,8 @@ class Queue:
                     merged={'items':combined,'status':combined[0].get('status','Mới'),'batch_version':1,
                             'requester_name':previous.get('requester_name') or payload.get('requester_name',''),
                             'request_count':previous.get('request_count',1)+1}
+                    skipped=previous.get('skipped_duplicates',[])+payload.get('skipped_duplicates',[])
+                    if skipped:merged['skipped_duplicates']=skipped
                     jid=candidate['id']
                     db.execute('UPDATE jobs SET payload=?,updated=? WHERE id=?',(json.dumps(merged,ensure_ascii=False),now,jid))
                     db.execute('INSERT INTO co_gather_events(event,job_id) VALUES(?,?)',(event,jid))
@@ -691,7 +694,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        states=counts, allowed_users=len(users), result_recovery_version=RESULT_RECOVERY_VERSION,
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
                        copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION,
-                       confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION)
+                       confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
+                       duplicate_filter_version=DUPLICATE_FILTER_VERSION)
 
     @app.post('/co/worker/result-status')
     def result_status():
@@ -834,6 +838,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 if not event_id:
                     event_id='message:'+event.message.id
                 job=queue.draft(event_id,owner,chat,payload,check_product=True,reply_token=event.reply_token,require_online=True,check_duplicates=True,gather_seconds=gather_seconds)
+                if job['state']=='skipped':
+                    reply(event.reply_token,job['result']);return True
                 if job['state'] in {'preview_queued','preview_running'}:
                     if os.getenv('CO_ACK_RECEIPT','0')=='1':
                         # Consume the form token once for receipt; MWG preview follows by push.

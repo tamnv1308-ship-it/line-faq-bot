@@ -93,12 +93,23 @@ class GatherTests(unittest.TestCase):
         self.assertEqual(json.loads(stored['payload'])['request_count'],2)
         self.assertEqual(self.q.take_preview_reply(first['id'])['token'],'token2')
 
-    def test_duplicate_is_rejected_before_append(self):
+    def test_all_duplicates_skipped_without_changing_original_batch(self):
         first=self.draft(1)
-        with self.assertRaises(DuplicateRequest):self.draft(2,payload=payload(1))
+        self.assertEqual(self.draft(2,payload=payload(1))['state'],'skipped')
         with self.q.db() as db:
             p=json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(first['id'],)).fetchone()['payload'])
         self.assertEqual(len(items(p)),1)
+        self.assertEqual(self.q.take_preview_reply(first['id'])['token'],'token1')
+
+    def test_partial_duplicates_append_only_new_rows_and_retain_warning(self):
+        first=self.draft(1)
+        merged=self.draft(2,payload={'items':[payload(1),payload(2)]})
+        self.assertEqual(merged['id'],first['id'])
+        p=json.loads(merged['payload'])
+        self.assertEqual([r['source'] for r in items(p)],['101','102'])
+        self.assertEqual(len(p['skipped_duplicates']),1)
+        merged=self.draft(3)
+        self.assertEqual(len(json.loads(merged['payload'])['skipped_duplicates']),1)
 
     def test_cancel_blocks_entire_batch_and_does_not_absorb_future_messages(self):
         first=self.draft(1);self.draft(2)
