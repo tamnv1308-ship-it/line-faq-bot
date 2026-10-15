@@ -23,7 +23,11 @@ def parse_rows(rows):
         if len(row) < 3:
             continue
         code = str(row[1]).strip()
-        if not re.fullmatch(r'\d{13}', code) or not re.search(r'iphone\s*18\s*pro\b', fold(row[2])):
+        # This sheet uses 13-digit MWG codes; numeric cells lose the leading 0.
+        # Only repair that single lost digit here, never in incoming CO forms.
+        if re.fullmatch(r'[1-9][0-9]{11}', code):
+            code = '0' + code
+        if not re.fullmatch(r'[0-9]{13}', code) or not re.search(r'iphone\s*18\s*pro\b', fold(row[2])):
             continue
         values = [str(row[n]).strip() if len(row) > n else '' for n in (3, 4, 5)]
         # Conflicting duplicate SKU entries are not evidence of permission.
@@ -34,10 +38,10 @@ def parse_rows(rows):
     return result
 
 
-def load_conditions():
+def load_conditions(force=False):
     global _cache, _until
     with _lock:
-        if time.monotonic() < _until:
+        if not force and time.monotonic() < _until:
             return _cache
         try:
             from sheets import get_client
@@ -52,6 +56,8 @@ def load_conditions():
             logging.getLogger(__name__).warning('CO policy unavailable; displaying unknown, not cached permissions.')
             _cache = {}
             _until = time.monotonic() + 15
+            if force:
+                raise
         return _cache
 
 

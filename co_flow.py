@@ -735,6 +735,15 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1)
 
+    @app.post('/co/worker/conditions/reload')
+    def conditions_reload():
+        authenticated()
+        try:
+            policies=load_conditions(force=True)
+        except Exception:
+            return jsonify(ok=False,error='Không tải được điều kiện từ Google Sheets.'),502
+        return jsonify(ok=True,count=len(policies),conditions=policies)
+
     @app.post('/co/worker/result-status')
     def result_status():
         authenticated()
