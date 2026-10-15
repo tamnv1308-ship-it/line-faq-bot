@@ -24,7 +24,8 @@ CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
 GATHER_SECONDS = 10
 MAX_BATCH_ROWS = 7
-CONFIRM_LAYOUT_VERSION = 3
+CONFIRM_LAYOUT_VERSION = 4
+CANCEL_QUIP = 'Ủa, giỡn mặt bot hả! 😂'
 HONORS_VERSION = 2
 RESULT_RECOVERY_VERSION = 1
 
@@ -122,8 +123,6 @@ def preview_text(job, successful_co=0, policies=None):
                       f"Sản phẩm: {item.get('product_name','Chưa kiểm tra')}\n"
                       f"Số lượng: {item['quantity']}\n"
                       f"Trạng thái: {item.get('status','Mới')}{conditions}\n\n📝 Note: {item['note']}")
-    if p.get('confirmation_lock_version')==CONFIRM_LOCK_VERSION and job['owner']!=PRIVATE_CO_OWNER:
-        blocks.append('⚠️ Quá hạn xác nhận: lần 1 khóa 1 phút, lần 2 khóa 3 phút, lần 3 chờ Tâm mở khóa.')
     blocks.append(f"XACNHAN {jid}\nHUY {jid}\n\n⏳ Hiệu lực: 1 phút")
     return '\n\n'.join(blocks)
 
@@ -397,7 +396,9 @@ class Queue:
                 "SELECT j.id,j.state FROM jobs j JOIN preview_replies p ON p.job_id=j.id WHERE p.received<?",
                 (time.time()-45,))]
 
-    def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False):
+    def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False, playful_cancel=False):
+        def cancelled(message):
+            return message+'\n\n'+CANCEL_QUIP if cancel and playful_cancel else message
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
             if require_online and not cancel:
@@ -407,10 +408,10 @@ class Queue:
             if not job:
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
             if job['state']=='expired':
-                return 'Xác nhận đã hết hạn. Yêu cầu đã tự hủy; chưa tạo CO.\n'+lock_notice(db,job['owner'],time.time(),PRIVATE_CO_OWNER)
+                return cancelled(f'Xác nhận {jid} đã hết hạn. Yêu cầu đã tự hủy; chưa tạo CO.\n'+lock_notice(db,job['owner'],time.time(),PRIVATE_CO_OWNER))
             if cancel and job['state'] in {'queued','preview_queued','verified_queued'}:
                 db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=?",(time.time(),jid))
-                return f'Đã hủy yêu cầu chờ {jid}; Mac sẽ không tạo yêu cầu này.'
+                return cancelled(f'Đã hủy yêu cầu chờ {jid}; Mac sẽ không tạo yêu cầu này.')
             if cancel and job['state'] in {'running','submitting','unknown'}:
                 return 'Không thể hủy: yêu cầu đang được xử lý hoặc chưa rõ kết quả. Cần kiểm tra MWG để tránh tạo trùng.'
             if job['state'] in {'preview_queued','preview_running'}:
@@ -423,7 +424,7 @@ class Queue:
                 db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,time.time()))
                 return None
-            return 'Đã hủy. Bạn có thể gửi form đã sửa.' if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.' + self.blocked_notice(db)
+            return cancelled(f'Đã hủy yêu cầu {jid}; chưa tạo CO.') if cancel else f'Đã xác nhận yêu cầu {jid}. Đang chờ máy Mac xử lý.' + self.blocked_notice(db)
 
     def confirm_all(self, owner, chat, cancel=False, reply_token=None, require_online=False):
         now = time.time()
@@ -901,7 +902,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                     if message is not None:
                         reply(event.reply_token,message)
                 else:
-                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True)
+                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True,playful_cancel=command.upper()=='HUY')
                     if message is not None:
                         reply(event.reply_token,message)
         except RequesterLocked as error:

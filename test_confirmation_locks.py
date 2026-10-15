@@ -7,7 +7,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 
-from co_flow import Queue, RequesterLocked, PRIVATE_CO_OWNER, install
+from co_flow import Queue, RequesterLocked, PRIVATE_CO_OWNER, CANCEL_QUIP, install
 from co_results import line_text_messages
 
 
@@ -77,6 +77,9 @@ class ConfirmationLockTests(unittest.TestCase):
     def test_batch_counts_once_and_releases_next_request(self):
         jid=self.ready(batch=True)
         nxt=self.q.draft('next','another','group',self.payload(),check_product=True)
+        self.now.return_value=1059;self.q.heartbeat()
+        self.assertIsNone(self.q.claim(True,jid,True))
+        self.now.return_value=1000
         self.expire(jid)
         self.assertEqual(self.lock()['strikes'],1)
         self.assertEqual(self.q.claim(True,jid,True),{'release_preview':True})
@@ -133,13 +136,46 @@ class ConfirmationLockTests(unittest.TestCase):
         self.assertIn('hết hiệu lực',self.q.unlock_requester(PRIVATE_CO_OWNER,'private','old','1'))
         self.assertIsNotNone(self.lock())
 
-    def test_warning_keeps_confirm_cancel_buttons(self):
+    def test_compact_form_keeps_deadline_buttons_without_lock_warning(self):
         jid=self.ready()
         with self.q.db() as db:job=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
         text=self.q.confirmation(job)
-        self.assertIn('lần 3 chờ Tâm',text)
+        self.assertNotIn('khóa',text)
+        self.assertNotIn(CANCEL_QUIP,text)
+        self.assertIn('Hiệu lực: 1 phút',text)
         self.assertEqual([x['action']['text'] for x in line_text_messages(text)[-1]['quickReply']['items']],
                          ['XACNHAN '+jid,'HUY '+jid])
+
+    def test_huy_reply_only_jokes_after_safe_cancellation(self):
+        messages=[]
+        env={'CO_ENABLED':'1','CO_DB_PATH':self.q.path,'CO_DATABASE_URL':'','CO_WORKER_TOKEN':'x'*32,'CO_ALLOWED_USER_IDS':'user'}
+        app=types.SimpleNamespace(post=lambda _:lambda f:f,get=lambda _:lambda f:f,
+                                  logger=types.SimpleNamespace(warning=lambda *a:None))
+        with patch.dict(os.environ,env),patch.dict('sys.modules',{'flask':types.SimpleNamespace(request=None,jsonify=None,abort=None)}):
+            handle,_=install(app,lambda token,text:messages.append(text) or True,lambda *a:True)
+            for state in ('draft','preview_queued','verified_queued','running','submitting','unknown','succeeded','expired','cancelled'):
+                with self.subTest(state=state):
+                    jid=self.ready()
+                    with self.q.db() as db:db.execute('UPDATE jobs SET state=? WHERE id=?',(state,jid))
+                    event=types.SimpleNamespace(reply_token='token',webhook_event_id='cancel-'+jid,source=types.SimpleNamespace(user_id='user',group_id='group'),message=types.SimpleNamespace(id=jid,text='HUY '+jid))
+                    handle(event)
+                    safe=state in {'draft','preview_queued','verified_queued','expired'}
+                    self.assertEqual(CANCEL_QUIP in messages[-1],safe)
+                    with self.q.db() as db:
+                        result=db.execute('SELECT state FROM jobs WHERE id=?',(jid,)).fetchone()['state']
+                        self.assertEqual(result,'cancelled' if state in {'draft','preview_queued','verified_queued'} else state)
+                        # Isolate fixtures so an intentional in-flight row cannot block the next preview.
+                        db.execute('DELETE FROM jobs WHERE id=?',(jid,))
+
+    def test_late_huy_preserves_lock_and_sua_has_no_joke(self):
+        jid=self.ready();self.expire(jid)
+        response=self.q.confirm(jid,'user','group',cancel=True,playful_cancel=True)
+        self.assertIn('tự hủy',response)
+        self.assertIn(CANCEL_QUIP,response)
+        self.assertEqual(self.lock()['strikes'],1)
+        self.now.return_value=1120;self.q.heartbeat()
+        jid=self.ready()
+        self.assertNotIn(CANCEL_QUIP,self.q.confirm(jid,'user','group',cancel=True))
 
     def test_webhook_owner_gate_and_expiry_notice_delivery(self):
         messages=[];pushes=[]
