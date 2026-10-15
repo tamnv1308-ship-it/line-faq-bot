@@ -20,7 +20,7 @@ class AdminTests(unittest.TestCase):
     def event(self,text,owner='admin'):
         return types.SimpleNamespace(reply_token='reply',webhook_event_id='event',source=types.SimpleNamespace(user_id=owner,group_id=owner),message=types.SimpleNamespace(id='msg',text=text))
     def test_offline_rejects_form_without_queueing(self):
-        self.handle(self.event('Kho xuất: 1\nKho nhận: 2\nMSP: 003','operator'))
+        self.handle(self.event('Kho xuất: 1\nKho nhận: 2\nMSP: 0000000000003','operator'))
         self.assertIn('offline',self.replies[-1])
         with self.q.db() as db:self.assertEqual(db.execute('SELECT COUNT(*) AS n FROM jobs').fetchone()['n'],0)
     def test_heartbeat_expires_after_thirty_seconds(self):

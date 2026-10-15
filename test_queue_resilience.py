@@ -30,8 +30,9 @@ class IsolatedQueueTests(unittest.TestCase):
             b=db.execute('SELECT state FROM jobs WHERE id=?',(blocked['id'],)).fetchone()
         self.assertEqual(tuple(a),('unknown','keep evidence'));self.assertEqual(b['state'],'queued')
     def test_new_related_request_rejected_early(self):
-        with self.assertRaises(DuplicateRequest):
-            self.q.draft('new','another','group',dict(self.p,destination='88',quantity=9),check_duplicates=True)
+        job=self.q.draft('new','another','group',dict(self.p,destination='88',quantity=9),check_duplicates=True)
+        self.assertEqual(job['state'],'skipped')
+        self.assertIn('đối soát',job['result'])
     def test_batch_with_one_conflict_stays_queued(self):
         j=self.q.draft('batch','owner','chat',{'items':[dict(self.p,source='99'),self.p]})
         self.q.confirm(j['id'],'owner','chat')

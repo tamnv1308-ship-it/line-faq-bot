@@ -24,6 +24,22 @@ COPY_FORMATTING = str.maketrans({
 })
 COPIED_TEXT_VERSION = 1
 DUPLICATE_FILTER_VERSION = 1
+ROW_VALIDATION_VERSION = 1
+
+
+class InvalidProductCode(ValueError):
+    def __init__(self, row):
+        self.row = dict(row)
+        super().__init__('Mã sản phẩm '+row['product']+' có '+str(len(row['product']))+
+                         ' số; cần đúng 13 số. Bot không tự thêm hoặc bỏ số.')
+
+
+def row_error_notice(rows):
+    if not rows:return ''
+    lines=[f'❌ Đã bỏ qua {len(rows)} dòng lỗi (chưa tạo CO):']
+    for row in rows:
+        lines.append(f"• {row['source']} → {row['destination']} | MSP {row['product']} | SL {row['quantity']}: {row['error']}")
+    return '\n'.join(lines)
 
 
 def transfer_key(item):
@@ -195,6 +211,8 @@ def parse_form(text):
     values.setdefault('status','Mới')
     if len(values['note'])>500:
         raise ValueError('Ghi chú vượt 500 ký tự. Rút gọn nội dung phụ và gửi lại; bot không tự cắt bỏ.')
+    if not re.fullmatch(r'[0-9]{13}',values['product']):
+        raise InvalidProductCode(values)
     return values
 
 
@@ -218,10 +236,18 @@ def parse_request(text):
         return parse_form(text)
     if len(groups)>7:
         raise ValueError('Tối đa 7 yêu cầu trong một tin nhắn.')
-    items=[parse_form(group) for group in groups]
-    if len(items)==1:
+    items=[];rejected=[]
+    for group in groups:
+        try:items.append(parse_form(group))
+        except InvalidProductCode as error:
+            rejected.append({key:error.row[key] for key in ('source','destination','product','quantity')})
+            rejected[-1]['error']=str(error)
+    if not items:
+        raise ValueError(row_error_notice(rejected))
+    if len(items)==1 and not rejected:
         return items[0]
     if len({item['status'] for item in items})!=1:
         raise ValueError('Các dòng trong cùng file phải cùng trạng thái sản phẩm. Gửi riêng các trạng thái khác nhau.')
     payload,_=deduplicate_request({'items':items,'status':items[0]['status'],'batch_version':1})
+    if rejected:payload['skipped_errors']=rejected
     return payload

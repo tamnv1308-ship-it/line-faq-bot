@@ -24,7 +24,7 @@ class ParserTests(unittest.TestCase):
             parse_form('SP: iPhone 18\nKho chuyển: 2533\nKho nhận: 315\nSL: 1')
 
     def test_status_choices(self):
-        base='Kho xuất: 1\nKho nhận: 2\nMSP: 0003\nSL: 1'
+        base='Kho xuất: 1\nKho nhận: 2\nMSP: 0000000000003\nSL: 1'
         self.assertEqual(parse_form(base)['status'],'Mới')
         for status in ['Mới','Đã sử dụng','Mới giảm giá']:
             parsed=parse_form(base+'\nTrạng thái: '+status)
@@ -46,7 +46,7 @@ class ParserTests(unittest.TestCase):
         p=parse_form(SAMPLE+'\nSL: 1 máy\nNote: chuyển gấp\nNhờ @Người F hỗ trợ\nGhi chú: khách đợi')
         self.assertEqual(p['note'],'QL cho hàng : Người A -\nchuyển gấp\nkhách đợi')
     def test_approval_notes_and_explicit_quantity(self):
-        base='Kho xuất: 1\nKho nhận: 2\nMSP: 0003'
+        base='Kho xuất: 1\nKho nhận: 2\nMSP: 0000000000003'
         p=parse_form(base+'\nQL cho hàng Hải 196767\nDM xác nhận: Hùng\nNhờ @A hỗ trợ\nSL: 3')
         self.assertEqual(p['note'],'QL cho hàng Hải 196767\nDM xác nhận: Hùng')
         self.assertEqual(p['quantity'],3)
@@ -72,7 +72,7 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(ValueError):parse_form('iPhone 1TB @Huy 2533 @Tam 315')
     def test_note_not_silently_truncated(self):
         with self.assertRaisesRegex(ValueError,'500'):
-            parse_form('Kho xuất: 1\nKho nhận: 2\nMSP: 0003\nSL: 1\nNote: '+'a'*501)
+            parse_form('Kho xuất: 1\nKho nhận: 2\nMSP: 0000000000003\nSL: 1\nNote: '+'a'*501)
 
 
 

@@ -21,7 +21,7 @@ def details(jobs, stores, tz):
             results=[{'co':co if valid else '', 'error':''} for _ in rows]
         for item,result in zip(rows,results):
             success=bool(result['co']) and not result['error'];qty=int(item['quantity'])
-            state='Thành công' if success else 'Chưa rõ' if j['state'] in ('unknown','succeeded') else 'Lỗi' if result['error'] or j['state']=='failed' else 'Đã hủy/hết hạn' if j['state'] in ('cancelled','expired') else 'Đang chờ'
+            state='Thành công' if success else 'Lỗi' if result.get('state')=='failed' else 'Chưa rõ' if j['state'] in ('unknown','succeeded') else 'Lỗi' if result['error'] or j['state']=='failed' else 'Đã hủy/hết hạn' if j['state'] in ('cancelled','expired') else 'Đang chờ'
             if state!='Chưa rõ':recent.append(dict(time=stamp.strftime('%d/%m %H:%M'),person=labels[('people',person)],source=str(item['source']),destination=str(item['destination']),product=item.get('product_name') or 'Chưa có tên sản phẩm',quantity=qty,co=result['co'] or '—',state=state))
             if not success:continue
             key=(result['co'],item['source'],item['destination'],item['product'],qty)

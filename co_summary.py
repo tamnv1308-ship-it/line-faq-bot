@@ -48,6 +48,7 @@ def aggregate(jobs,stores):
                 ranks['province'][store.get('province','Chưa phân vùng')]+=1
                 product=item['product'];names[product]=item.get('product_name') or 'Chưa có tên sản phẩm'
                 ranks['product'][product]+=1
+            elif result.get('state')=='failed':stats['failed']+=1
             elif j['state'] in ('unknown','succeeded'):stats['unknown']+=1
             elif j['state']=='failed' or result['error']:stats['failed']+=1
             elif j['state'] in ('cancelled','expired'):stats['cancelled']+=1

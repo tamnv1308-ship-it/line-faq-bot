@@ -12,6 +12,7 @@ from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message, COPIED_TEXT_VERSION
 from transfer_parser import transfer_key, deduplicate_request, duplicate_notice, DUPLICATE_FILTER_VERSION
+from transfer_parser import row_error_notice, ROW_VALIDATION_VERSION
 from destination_policy import check_destinations, BlockedDestination
 from co_regions import region_label, cluster_condition, clear_store_cache
 from co_store_directory import write as update_store_directory, status as store_directory_status
@@ -31,7 +32,7 @@ def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
     return now >= job['created'] + limit
 
-from co_results import items, preview_names, decode_results, result_text, note_group_text, preview_details
+from co_results import items, preview_names, decode_results, result_text, note_group_text, preview_details, filtered_preview, protected_items
 
 MEMBER_CO_GROUP = 'Cb71979a134ed1fd580e3e9d133f1d29f'
 DISABLED_CO_GROUP = 'Ca6ebad8571ec436ed0cc4a68729d22c0'
@@ -101,6 +102,8 @@ def preview_text(job, successful_co=0, policies=None):
     skipped=duplicate_notice(p.get('skipped_duplicates',[]))
     if skipped:
         blocks.append(skipped+f'\nChỉ xác nhận {len(rows)} dòng còn lại bên dưới.')
+    rejected=row_error_notice(p.get('skipped_errors',[]))
+    if rejected:blocks.append(rejected+f'\nChỉ xác nhận {len(rows)} dòng hợp lệ bên dưới.')
     for n,item in enumerate(rows,1):
         policy=condition_text(item,policies)
         condition_lines=policy.splitlines()[1:] if policy else []
@@ -320,19 +323,34 @@ class Queue:
                 for candidate in candidates:
                     if (candidate['state']=='draft' and draft_expired(candidate,now)) or (candidate['state'] in {'queued','verified_queued','preview_queued'} and candidate['created']<now-300):
                         continue
-                    for item in items(json.loads(candidate['payload'])):
+                    for item in protected_items(candidate):
                         existing.setdefault(transfer_key(item),candidate['id'])
+                input_errors=payload.get('skipped_errors',[])
                 payload,skipped=deduplicate_request(payload,existing)
                 if payload is None:
                     # Commit the handled event without creating a job. A webhook
                     # redelivery must not resurrect it after the original CO finishes.
                     db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',
                                (hashlib.sha256(event.encode()).hexdigest(),))
-                    return {'id':None,'state':'skipped','result':duplicate_notice(skipped)+'\nKhông còn dòng mới để xử lý; không thêm yêu cầu vào hàng chờ.'}
-                incoming_stocks={stock_key(item) for item in items(payload)}
+                    notice='\n\n'.join(x for x in (duplicate_notice(skipped),row_error_notice(input_errors)) if x)
+                    return {'id':None,'state':'skipped','result':notice+'\nKhông còn dòng mới để xử lý; không thêm yêu cầu vào hàng chờ.'}
+                blocked={}
                 for uncertain in (row for row in candidates if row['state']=='unknown'):
-                    if incoming_stocks & {stock_key(item) for item in items(json.loads(uncertain['payload']))}:
-                        raise DuplicateRequest('Kho xuất và mã sản phẩm đang có yêu cầu chưa rõ kết quả '+uncertain['id']+'. Cần đối soát MWG trước khi tạo tiếp; chưa nhận yêu cầu này.')
+                    for item in protected_items(uncertain,stock_only=True):blocked[stock_key(item)]=uncertain['id']
+                kept=[];rejected=list(payload.get('skipped_errors',[]))
+                for item in items(payload):
+                    conflict=blocked.get(stock_key(item))
+                    if conflict:
+                        rejected.append({key:item[key] for key in ('source','destination','product','quantity')})
+                        rejected[-1]['error']='Kho xuất + MSP đang chờ đối soát yêu cầu '+conflict+'; chưa nhận dòng mới này.'
+                    else:kept.append(item)
+                if len(kept)!=len(items(payload)):
+                    if not kept:
+                        db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',
+                                   (hashlib.sha256(event.encode()).hexdigest(),))
+                        notice='\n\n'.join(x for x in (duplicate_notice(skipped),row_error_notice(rejected)) if x)
+                        return {'id':None,'state':'skipped','result':notice+'\nKhông còn dòng mới để xử lý.'}
+                    payload=dict(payload,items=kept,skipped_errors=rejected)
             # Only the same owner may approve/cancel the combined rows. Never
             # append to a claimed preview or extend the first message's deadline.
             if check_product and gather_seconds:
@@ -347,6 +365,8 @@ class Queue:
                             'request_count':previous.get('request_count',1)+1}
                     skipped=previous.get('skipped_duplicates',[])+payload.get('skipped_duplicates',[])
                     if skipped:merged['skipped_duplicates']=skipped
+                    rejected=previous.get('skipped_errors',[])+payload.get('skipped_errors',[])
+                    if rejected:merged['skipped_errors']=rejected
                     jid=candidate['id']
                     db.execute('UPDATE jobs SET payload=?,updated=? WHERE id=?',(json.dumps(merged,ensure_ascii=False),now,jid))
                     db.execute('INSERT INTO co_gather_events(event,job_id) VALUES(?,?)',(event,jid))
@@ -468,12 +488,12 @@ class Queue:
                        ('Máy Mac gián đoạn. Cần kiểm tra MWG trước khi gửi lại để tránh tạo trùng.',time.time(),cutoff))
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('running','submitting','preview_running')").fetchone():
                 return None
-            unresolved=db.execute("SELECT payload FROM jobs WHERE state='unknown'").fetchall()
+            unresolved=db.execute("SELECT payload,result,state FROM jobs WHERE state='unknown'").fetchall()
             if unresolved and not recovery_protocol:
                 return None  # Older workers must retain their global safety stop.
             if unresolved and not page_ready:
                 return {'recovery_required':True}
-            blocked={stock_key(item) for row in unresolved for item in items(json.loads(row['payload']))}
+            blocked={stock_key(item) for row in unresolved for item in protected_items(row,stock_only=True)}
             def conflicts(candidate):
                 return any(stock_key(item) in blocked for item in items(json.loads(candidate['payload'])))
             eligible="('queued','preview_queued','verified_queued')" if preview_protocol else "('queued')"
@@ -504,9 +524,14 @@ class Queue:
                 return True
             if state=='preview_ready' and job['state'] in {'draft','preview_running'}:
                 payload=json.loads(job['payload'])
+                receipt=hashlib.sha256(result.encode()).hexdigest()
+                if job['state']=='draft' and payload.get('preview_receipt')==receipt:
+                    return True
                 try:
+                    if result.startswith('{'):
+                        payload,details=filtered_preview(payload,result)
+                    else:details=None
                     names=preview_names(payload,result)
-                    details=preview_details(payload,result) if result.startswith('{') else None
                 except (ValueError,TypeError):
                     return False
                 if job['state']=='draft':
@@ -519,6 +544,7 @@ class Queue:
                 if 'items' in payload:
                     payload['product_name']='MWG_BATCH_READY'
                 payload['confirmation_lock_version']=CONFIRM_LOCK_VERSION
+                payload['preview_receipt']=receipt
                 now=time.time()
                 db.execute("UPDATE jobs SET state='draft',payload=?,result='MWG_PREVIEW',created=?,updated=?,notified=0 WHERE id=?",
                            (json.dumps(payload,ensure_ascii=False),now,now,jid))
@@ -529,6 +555,8 @@ class Queue:
                     if state=='succeeded' and (not all(row['co'] or row['error'] for row in rows) or not any(row['co'] for row in rows)):
                         return False
                     if state=='failed' and any(row['co'] for row in rows):
+                        return False
+                    if state!='unknown' and any(row.get('state')=='unknown' for row in rows):
                         return False
                 except (ValueError,TypeError):
                     return False
@@ -695,7 +723,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        gather_seconds=gather_seconds, max_batch_rows=MAX_BATCH_ROWS,
                        copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION,
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
-                       duplicate_filter_version=DUPLICATE_FILTER_VERSION)
+                       duplicate_filter_version=DUPLICATE_FILTER_VERSION,
+                       row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1)
 
     @app.post('/co/worker/result-status')
     def result_status():

@@ -11,5 +11,5 @@ class ProductAliasesTests(unittest.TestCase):
         p=parse_request('Sản phẩm: iPhone\ncode 0131491005418\nKho xuất: 204\nKho nhận: 985')
         self.assertEqual(p['product'],'0131491005418')
     def test_mixed_batch_aliases(self):
-        p=parse_request('code 00123\nKho xuất: 1\nKho nhận: 2\n===\nsan pham 00456\nKho xuất: 3\nKho nhận: 4')
-        self.assertEqual([x['product'] for x in p['items']],['00123','00456'])
+        p=parse_request('code 0000000000123\nKho xuất: 1\nKho nhận: 2\n===\nsan pham 0000000000456\nKho xuất: 3\nKho nhận: 4')
+        self.assertEqual([x['product'] for x in p['items']],['0000000000123','0000000000456'])
