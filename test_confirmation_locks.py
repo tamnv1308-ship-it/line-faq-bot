@@ -7,7 +7,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 
-from co_flow import Queue, RequesterLocked, PRIVATE_CO_OWNER, CANCEL_QUIP, install
+from co_flow import Queue, RequesterLocked, PRIVATE_CO_OWNER, CANCEL_QUIPS, install
 from co_results import line_text_messages
 
 
@@ -141,7 +141,7 @@ class ConfirmationLockTests(unittest.TestCase):
         with self.q.db() as db:job=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
         text=self.q.confirmation(job)
         self.assertNotIn('khóa',text)
-        self.assertNotIn(CANCEL_QUIP,text)
+        self.assertFalse(any(quip in text for quip in CANCEL_QUIPS))
         self.assertIn('Hiệu lực: 1 phút',text)
         self.assertEqual([x['action']['text'] for x in line_text_messages(text)[-1]['quickReply']['items']],
                          ['XACNHAN '+jid,'HUY '+jid])
@@ -160,7 +160,7 @@ class ConfirmationLockTests(unittest.TestCase):
                     event=types.SimpleNamespace(reply_token='token',webhook_event_id='cancel-'+jid,source=types.SimpleNamespace(user_id='user',group_id='group'),message=types.SimpleNamespace(id=jid,text='HUY '+jid))
                     handle(event)
                     safe=state in {'draft','preview_queued','verified_queued','expired'}
-                    self.assertEqual(CANCEL_QUIP in messages[-1],safe)
+                    self.assertEqual(sum(quip in messages[-1] for quip in CANCEL_QUIPS),int(safe))
                     with self.q.db() as db:
                         result=db.execute('SELECT state FROM jobs WHERE id=?',(jid,)).fetchone()['state']
                         self.assertEqual(result,'cancelled' if state in {'draft','preview_queued','verified_queued'} else state)
@@ -171,11 +171,12 @@ class ConfirmationLockTests(unittest.TestCase):
         jid=self.ready();self.expire(jid)
         response=self.q.confirm(jid,'user','group',cancel=True,playful_cancel=True)
         self.assertIn('tự hủy',response)
-        self.assertIn(CANCEL_QUIP,response)
+        self.assertEqual(sum(quip in response for quip in CANCEL_QUIPS),1)
         self.assertEqual(self.lock()['strikes'],1)
         self.now.return_value=1120;self.q.heartbeat()
         jid=self.ready()
-        self.assertNotIn(CANCEL_QUIP,self.q.confirm(jid,'user','group',cancel=True))
+        response=self.q.confirm(jid,'user','group',cancel=True)
+        self.assertFalse(any(quip in response for quip in CANCEL_QUIPS))
 
     def test_webhook_owner_gate_and_expiry_notice_delivery(self):
         messages=[];pushes=[]

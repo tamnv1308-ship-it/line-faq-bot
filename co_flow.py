@@ -24,8 +24,16 @@ CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
 GATHER_SECONDS = 10
 MAX_BATCH_ROWS = 7
-CONFIRM_LAYOUT_VERSION = 4
-CANCEL_QUIP = 'Ủa, giỡn mặt bot hả! 😂'
+CONFIRM_LAYOUT_VERSION = 5
+CANCEL_QUIPS = (
+    'Ủa, giỡn mặt bot hả! 😂',
+    'Gọi bot dậy rồi cho bot ngủ lại hả? 😴',
+    'Tưởng chốt đơn, ai dè chốt hủy! 🫠',
+    'Vừa lên xe đã quay đầu rồi! 🛵',
+    'CO chưa ra đời đã bị cho nghỉ việc! 🤣',
+    'Đơn đã bay màu, tình nghĩa vẫn còn! 😂',
+    'Bot soạn đồ đi chuyển hàng rồi mà! 📦',
+)
 HONORS_VERSION = 2
 RESULT_RECOVERY_VERSION = 1
 
@@ -398,7 +406,7 @@ class Queue:
 
     def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False, playful_cancel=False):
         def cancelled(message):
-            return message+'\n\n'+CANCEL_QUIP if cancel and playful_cancel else message
+            return message+'\n\n'+secrets.choice(CANCEL_QUIPS) if cancel and playful_cancel else message
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
             if require_online and not cancel:
