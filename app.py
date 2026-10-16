@@ -335,6 +335,9 @@ def reply_price_cards(token, messages):
 
 handle_price = price_reply.install(app, reply_text, verify_price_note, reply_price_cards)
 
+import tao_portal
+handle_tao = tao_portal.install(app, reply_text, config.ADMIN_USER_IDS)
+
 scheduler.add_job(notify_co, 'interval', seconds=1, id='co_result_notifications', max_instances=1)
 scheduler.start()
 
@@ -420,6 +423,8 @@ def log_message_source(event):
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    if handle_tao(event):
+        return
     if handle_price(event):
         return
     log_message_source(event)
@@ -604,3 +609,4 @@ def create_report_image():
     filename = f"apple_dashboard_{now.strftime('%Y%m%d_%H%M%S')}_{secrets.token_urlsafe(12)}.png"
     image.save(REPORT_DIRECTORY / filename, "PNG", optimize=True)
     return filename
+
