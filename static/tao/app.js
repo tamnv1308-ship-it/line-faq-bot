@@ -5,6 +5,7 @@
   const notice=document.getElementById('notice'), progress=document.getElementById('progress');
   const state={page:'home',me:null,jobs:[],filter:'active',period:'today',offset:0,more:false,job:null,search:'',lookup:null,conditions:null,summary:null,locks:[],queueOverview:null,cancelPreview:null,unknownReview:null,unknownChecked:false,busy:false,clock:0};
   let activeRefresh=0, serial=0, timer=null, liffReady=false, config=null;
+  const editor={text:'',review:null,scope:'group',options:null,pending:null};
   const paths={search:'m21 21-5-5M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16',
     home:'m3 10 9-7 9 7v10H3ZM9 20v-7h6v7',layers:'m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 17l10 5 10-5',
     check:'m5 12 4 4L19 6',arrow:'M4 12h16m-6-6 6 6-6 6',back:'M20 12H4m6-6-6 6 6 6',right:'m9 5 7 7-7 7',
@@ -26,7 +27,7 @@
       const response=await fetch('/tao/api/'+path,{...options,credentials:'same-origin',cache:'no-store',signal:controller.signal,
         headers:{...(options.body?{'Content-Type':'application/json','X-Tao-CSRF':state.me?.csrf||''}:{}),...(options.headers||{})}});
       const data=await response.json();
-      if(!response.ok){const e=new Error(data.error||'Chưa thực hiện được thao tác.');e.status=response.status;throw e;}
+      if(!response.ok){const e=new Error(data.error||'Chưa thực hiện được thao tác.');e.status=response.status;e.data=data;throw e;}
       if(data.server_time)state.clock=data.server_time*1000-Date.now();
       return data;
     }catch(e){
@@ -42,15 +43,83 @@
     return `<button class="tao-order" data-job="${esc(job.id)}"><div class="tao-order-top"><span>#${esc(job.id)}</span>${badge(job)}</div><div class="tao-route">${esc(row.source)} ${icon('arrow')} ${esc(row.destination)}</div><p class="tao-product">${esc(short(row.product_name)||'Đang lấy tên sản phẩm từ MWG')}</p>${job.rows.length>1?`<p class="tao-subtitle">+ ${job.rows.length-1} dòng khác</p>`:''}<div class="tao-order-foot"><span>${esc(job.requester)} · ${job.rows.length>1?job.rows.length+' dòng':'SL '+row.quantity}</span><b>${job.can_confirm?'Xác nhận':'Chi tiết'} ${icon('right')}</b></div></button>`;
   }
   function navigation(){
-    const active=state.page==='detail'?'queue':['report','conditions'].includes(state.page)?'home':state.page;
+    const active=['detail','compose'].includes(state.page)?'queue':['report','conditions'].includes(state.page)?'home':state.page;
     nav.innerHTML=[['home','home','Trang chủ'],['queue','layers','Yêu cầu'],['lookup','search','Tra cứu'],...(state.me.admin?[['admin','settings','Quản lý']]:[])].map(([p,i,t])=>`<button data-go="${p}" ${active===p?'aria-current="page"':''}>${icon(i)}${t}</button>`).join('');
     nav.hidden=false;
     nav.classList.toggle('tao-nav-admin',state.me.admin);
   }
   function home(){
     const me=state.me,health=me.health;
-    const tools=[['lookup','search','Tra cứu CO','Tìm nhanh kết quả'],['queue','layers','Yêu cầu',me.owner?'Quản lý các yêu cầu':'Các yêu cầu của bạn'],['conditions','shield','Điều kiện SP','Kiểm tra từ Sheet DATA'],...(me.owner?[['report','chart','Tổng kết','Hôm nay · 7 · 30 ngày']]:[])];
+    const tools=[['compose','box','Tạo yêu cầu','Dán tin nhắn · Sửa form'],['lookup','search','Tra cứu CO','Tìm nhanh kết quả'],['queue','layers','Yêu cầu',me.owner?'Quản lý các yêu cầu':'Các yêu cầu của bạn'],['conditions','shield','Điều kiện SP','Kiểm tra từ Sheet DATA'],...(me.owner?[['report','chart','Tổng kết','Hôm nay · 7 · 30 ngày']]:[])];
     return `<div class="tao-greeting"><div><div class="tao-kicker">Công cụ Táo</div><h1>Chào ${esc(me.owner?'Tâm':me.name)} 👋</h1><p class="tao-subtitle">Mọi việc gọn trong một chỗ.</p></div><span class="tao-avatar">${esc(me.name.trim().charAt(0).toUpperCase())}</span></div><div class="tao-live"><b class="${health.mwg_ready?'':'not-ready'}"><span class="tao-dot"></span>${esc(health.worker_label)}</b><span>${me.enabled?'Nhận CO theo quyền hiện tại':'Chỉ Tâm được tạo CO'}</span></div>${me.notice?`<div class="tao-info-card tao-long-text">${esc(me.notice)}</div>`:''}<div class="tao-grid">${tools.map(([p,i,t,d],n)=>`<button class="tao-tool ${n===0?'tao-tool-featured':''}" data-go="${p}"><span class="tao-tool-icon">${icon(i)}</span><strong>${t}</strong><small>${d}</small></button>`).join('')}</div><div class="tao-section-heading"><h2>Yêu cầu đang xử lý</h2><button class="tao-link" data-go="queue">Xem tất cả ${icon('arrow')}</button></div>${state.jobs.length?state.jobs.slice(0,2).map(jobCard).join(''):'<div class="tao-info-card tao-empty">Không có yêu cầu đang chờ.</div>'}${me.admin?`<button class="tao-admin-entry" data-go="admin">${icon('shield')}<span>${me.owner?'Quản lý của Tâm':'Quản lý ADM'}<small>${me.owner?'Bật/tắt bot · Mở khóa · Hàng chờ':'Bật/tắt nhận CO · Trạng thái bot'}</small></span>${icon('right')}</button>`:''}`;
+  }
+  const fieldLabels={source:'Kho xuất',destination:'Kho nhận',product:'Mã sản phẩm',quantity:'Số lượng',status:'Trạng thái',note:'Note'};
+  function compose(){
+    const review=editor.review,options=editor.options,locked=!!editor.pending||state.busy;
+    const field=(row,i,key)=>{
+      const id='compose-'+i+'-'+key,value=row[key]||'',bad=review.errors[i]?.[key]||'';
+      const attrs=`id="${id}" data-row="${i}" data-field="${key}" aria-describedby="${id}-error" aria-invalid="${!!bad}" ${locked?'disabled':''}`;
+      const control=key==='status'?`<select ${attrs}>${!options?.statuses.includes(value)?`<option value="${esc(value)}">${esc(value||'Chọn trạng thái')}</option>`:''}${(options?.statuses||[]).map(v=>`<option ${v===value?'selected':''}>${esc(v)}</option>`).join('')}</select>`:key==='note'?`<textarea ${attrs} rows="3" maxlength="500">${esc(value)}</textarea>`:`<input ${attrs} type="text" inputmode="numeric" autocomplete="off" value="${esc(value)}">`;
+      return `<div class="tao-compose-field ${['product','status','note'].includes(key)?'full':''}"><label for="${id}">${fieldLabels[key]}</label>${control}<small id="${id}-error" class="tao-field-error" ${bad?'':'hidden'}>${esc(bad)}</small></div>`;
+    };
+    return title('Tạo yêu cầu','Dán tin nhắn, kiểm tra rồi gửi')+`<div class="tao-info-card"><label class="tao-label" for="compose-text">Tin nhắn cần tạo CO</label><textarea id="compose-text" class="tao-paste" rows="6" maxlength="10000" placeholder="Dán nguyên tin nhắn có kho xuất, kho nhận, MSP…" ${locked?'disabled':''}>${esc(editor.text)}</textarea><p class="tao-hint">Không ghi số lượng: 1 · Không ghi trạng thái: Mới.</p><button class="tao-primary tao-wide" data-action="compose-parse" ${locked?'disabled':''}>${icon('layers')}${review?'Tách lại tin nhắn':'Tách thành form'}</button></div>${review?`<div class="tao-section-heading"><h2>${review.rows.length} dòng yêu cầu</h2><span class="tao-badge neutral">Tối đa ${options?.max_rows||7}</span></div><p class="tao-hint">Tên sản phẩm sẽ được lấy từ MWG sau khi gửi. Bot tự thêm thông tin liên hệ người gửi vào Note.</p><div id="compose-global" class="tao-field-error" role="status">${review.global_errors.map(esc).join('<br>')}</div>${review.rows.map((row,i)=>`<section class="tao-info-card" aria-label="Dòng ${i+1}"><div class="tao-section-heading"><h2>Dòng ${i+1}</h2><button class="tao-link" data-remove-row="${i}" ${locked?'disabled':''}>Xóa dòng ${i+1}</button></div><div class="tao-compose-fields">${Object.keys(fieldLabels).map(key=>field(row,i,key)).join('')}</div>${review.warnings.filter(w=>w.row===i).map(w=>`<p class="tao-hint tao-row-warning">${esc(w.message)}</p>`).join('')}</section>`).join('')}<button class="tao-secondary tao-wide" data-action="compose-add" ${locked||review.rows.length>=(options?.max_rows||7)?'disabled':''}>+ Thêm dòng</button><div class="tao-info-card"><label class="tao-label" for="compose-scope">Gửi yêu cầu vào</label><select id="compose-scope" class="tao-scope" ${locked?'disabled':''}>${(options?.scopes||[]).map(s=>`<option value="${s.value}" ${s.value===editor.scope?'selected':''}>${esc(s.label)}</option>`).join('')}</select><p class="tao-hint">Sau khi MWG trả thông tin, em vẫn cần Xác nhận trong 1 phút để tạo CO.</p></div>${editor.pending?'<div class="tao-info-card"><p class="tao-product">Đang giữ nguyên lần gửi để tránh tạo trùng. Kiểm tra xem bot đã nhận chưa.</p><button class="tao-primary tao-wide" data-action="compose-recover">Kiểm tra lần gửi</button><button class="tao-secondary tao-wide" data-action="compose-submit">Thử gửi lại cùng yêu cầu</button></div>':`<div class="tao-actions"><button class="tao-primary tao-wide" data-action="compose-submit" ${!review.rows.length?'disabled':''}>${icon('arrow')}Gửi yêu cầu · Chưa tạo CO</button></div>`}`:''}`;
+  }
+  function composeEdit(target){
+    if(target.id==='compose-text'){editor.text=target.value;return;}
+    if(target.id==='compose-scope'){editor.scope=target.value;return;}
+    const key=target.dataset.field,index=Number(target.dataset.row),review=editor.review;
+    if(!key||!review?.rows[index]||editor.pending)return;
+    review.rows[index][key]=target.value;
+    delete review.errors[index][key];review.warnings=[];
+    target.setAttribute('aria-invalid','false');document.getElementById(target.id+'-error').hidden=true;
+    review.global_errors=[];document.getElementById('compose-global').textContent='';
+    main.querySelectorAll('.tao-row-warning').forEach(el=>el.remove());
+    // Full validation runs on the server again before a request enters the queue.
+  }
+  async function composeAction(action){
+    if(state.busy)return;
+    state.busy=true;++serial;loading(true);error('');
+    main.querySelectorAll('button,input,textarea,select').forEach(el=>el.disabled=true);
+    let destination=null;
+    try{
+      if(action==='parse'){
+        editor.review=await api('compose/parse',{method:'POST',body:JSON.stringify({text:editor.text})});
+      }else if(action==='submit'){
+        if(!editor.pending){
+          const review=await api('compose/validate',{method:'POST',body:JSON.stringify({rows:editor.review.rows})});
+          editor.review=review;
+          if(!review.valid){error('Sửa các ô đang báo lỗi trước khi gửi.');return;}
+          editor.pending={key:crypto.randomUUID().replaceAll('-',''),scope:editor.scope,rows:review.rows};
+        }
+        const response=await api('compose/submit',{method:'POST',body:JSON.stringify(editor.pending)});
+        error(response.message||'');destination=response.job;
+        editor.pending=null;
+      }else if(action==='recover'){
+        const response=await api('compose/submissions/'+editor.pending.key);
+        if(response.found){destination=response.job;editor.pending=null;}
+        else if(response.skipped){editor.pending=null;error('Bot đã xử lý lần gửi này và bỏ qua các dòng trùng hoặc đang chờ đối soát. Không tạo yêu cầu mới.');}
+        else error('Chưa thấy yêu cầu được ghi nhận. Em có thể thử gửi lại cùng yêu cầu bằng nút bên dưới.');
+      }
+    }catch(e){
+      if(e.data?.review)editor.review=e.data.review;
+      if(e.status&&e.status<500&&e.status!==401&&e.status!==429)editor.pending=null;
+      error(e.message);
+      if(e.status===401){loginScreen('Phiên đăng nhập hết hạn. Form đang sửa vẫn được giữ trong trang này.');return;}
+    }finally{
+      state.busy=false;loading(false);
+      if(destination){editor.review=null;editor.text='';await go('detail',destination.id);}
+      else render();
+    }
+  }
+  async function acknowledgePreview(){
+    const job=state.job;
+    if(state.page!=='detail'||document.hidden||!job?.can_ack_preview||state.busy)return;
+    state.busy=true;
+    try{
+      const response=await api('jobs/'+job.id+'/preview-seen',{method:'POST',body:JSON.stringify({revision:job.preview_revision})});
+      if(state.page==='detail'&&state.job?.id===job.id){state.job=response.job;render();}
+    }catch(e){error(e.message);}
+    finally{state.busy=false;}
   }
   function bulkCancelCard(){
     if(!state.me.owner)return '';
@@ -81,8 +150,9 @@
   function render(){
     if(!state.me)return;
     navigation();
-    main.innerHTML=({home,queue,detail,lookup,conditions,report,admin}[state.page]||home)();
+    main.innerHTML=({home,queue,detail,compose,lookup,conditions,report,admin}[state.page]||home)();
     countdown();
+    if(state.page==='detail'&&state.job?.can_ack_preview)requestAnimationFrame(()=>acknowledgePreview());
   }
   function countdown(){
     document.querySelectorAll('[data-countdown]').forEach(el=>{
@@ -92,7 +162,7 @@
     });
   }
   async function refresh(quiet=false){
-    if(!state.me||state.busy||(quiet&&(activeRefresh||state.unknownReview||state.page==='queue'&&state.jobs.length>20)))return;
+    if(!state.me||state.busy||(quiet&&(activeRefresh||state.unknownReview||state.page==='compose'||state.page==='queue'&&state.jobs.length>20)))return;
     if(!quiet){state.unknownReview=null;state.unknownChecked=false;}
     activeRefresh++;
     const generation=++serial,page=state.page;
@@ -100,7 +170,10 @@
     try{
       const me=await api('me');
       if(generation!==serial)return;state.me=me;
-      if(page==='home'||page==='queue'){
+      if(page==='compose'){
+        editor.options=await api('compose');if(generation!==serial)return;
+        if(!editor.options.scopes.some(s=>s.value===editor.scope))editor.scope='group';
+      }else if(page==='home'||page==='queue'){
         const data=await api('jobs?filter='+(page==='home'?'active':state.filter));
         if(generation!==serial)return;state.jobs=data.jobs;state.offset=0;state.more=data.more;
       }else if(page==='detail'&&state.job){
@@ -154,6 +227,10 @@
     if(button.dataset.filter){state.filter=button.dataset.filter;await refresh();return;}
     if(button.dataset.period){state.period=button.dataset.period;await refresh();return;}
     if(button.dataset.copy){try{await navigator.clipboard.writeText(button.dataset.copy);error('Đã sao chép mã CO.');}catch{error('Em nhấn giữ mã CO để sao chép nhé.');}return;}
+    if(button.dataset.removeRow!==undefined&&!editor.pending){
+      const index=Number(button.dataset.removeRow);editor.review.rows.splice(index,1);editor.review.errors.splice(index,1);
+      editor.review.warnings=[];editor.review.global_errors=[];render();return;
+    }
     if(button.dataset.unlock!==undefined){
       const row=state.locks[Number(button.dataset.unlock)];
       if(row&&window.confirm('Mở khóa '+row.name+' và reset số lần quá hạn về 0?')){
@@ -161,6 +238,14 @@
       }return;
     }
     switch(button.dataset.action){
+      case 'compose-parse':await composeAction('parse');break;
+      case 'compose-submit':await composeAction('submit');break;
+      case 'compose-recover':await composeAction('recover');break;
+      case 'compose-add':
+        if(editor.review&&!editor.pending&&editor.review.rows.length<(editor.options?.max_rows||7)){
+          editor.review.rows.push({source:'',destination:'',product:'',quantity:'1',status:editor.review.rows[0]?.status||'Mới',note:''});
+          editor.review.errors.push({});render();
+        }break;
       case 'login':
         try{loading(true);error('');if(!liffReady){await liff.init({liffId:config.liff_id});liffReady=true;}if(!liff.isLoggedIn())liff.login({redirectUri:location.origin+'/tao/'});else await authenticate();}catch(e){error(e.message);loading(false);}break;
       case 'confirm':
@@ -194,12 +279,14 @@
           await mutate('admin/intake',{enabled});await refresh(true);
         }break;}
       case 'logout':
-        if(await mutate('logout')){if(liffReady)liff.logout();loginScreen('Đã đăng xuất.');}break;
+        if(await mutate('logout')){editor.text='';editor.review=null;editor.pending=null;if(liffReady)liff.logout();loginScreen('Đã đăng xuất.');}break;
       case 'more':
         try{loading(true);const data=await api('jobs?filter='+state.filter+'&offset='+(state.jobs.length));const seen=new Set(state.jobs.map(j=>j.id));state.jobs.push(...data.jobs.filter(j=>!seen.has(j.id)));state.more=data.more;render();}catch(e){error(e.message);}finally{loading(false);}break;
     }
   });
+  main.addEventListener('input',event=>{if(state.page==='compose')composeEdit(event.target);});
   main.addEventListener('change',event=>{
+    if(state.page==='compose')composeEdit(event.target);
     if(event.target.matches('[data-unknown-check]')){
       state.unknownChecked=event.target.checked===true;
       const button=main.querySelector('[data-action="unknown-confirm"]');if(button)button.disabled=!state.unknownChecked||state.busy;

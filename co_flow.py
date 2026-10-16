@@ -307,7 +307,7 @@ class Queue:
             return (f"Mac: {'online' if online else 'offline'}\nBOT: {health['worker_label']}\nNhận CO: {intake}\n"
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
-    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0):
+    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0, request_fingerprint=None):
         check_destinations(payload)
         if gather_seconds not in (0,GATHER_SECONDS):
             raise ValueError('Thời gian gom yêu cầu chỉ hỗ trợ 0 hoặc 10 giây.')
@@ -318,6 +318,8 @@ class Queue:
             if not old:
                 old=db.execute('SELECT j.* FROM jobs j JOIN co_gather_events e ON e.job_id=j.id WHERE e.event=?',(event,)).fetchone()
             if old:
+                if request_fingerprint and json.loads(old['payload']).get('portal_requests',{}).get(event)!=request_fingerprint:
+                    raise ValueError('Lần gửi này đã được ghi nhận với nội dung khác. Mở yêu cầu đã gửi để kiểm tra.')
                 return dict(old)
             locked=lock_notice(db,owner,now,PRIVATE_CO_OWNER)
             if locked:
@@ -327,6 +329,8 @@ class Queue:
             if require_online:
                 reason=self.unavailable(db,owner)
                 if reason:raise BotUnavailable(reason)
+            if request_fingerprint:
+                payload=dict(payload,portal_requests={event:request_fingerprint})
             if check_duplicates:
                 candidates=db.execute("SELECT id,payload,state,created,result,notified FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
                 existing={}
@@ -377,6 +381,8 @@ class Queue:
                     if skipped:merged['skipped_duplicates']=skipped
                     rejected=previous.get('skipped_errors',[])+payload.get('skipped_errors',[])
                     if rejected:merged['skipped_errors']=rejected
+                    portal_requests=dict(previous.get('portal_requests',{}),**payload.get('portal_requests',{}))
+                    if portal_requests:merged['portal_requests']=portal_requests
                     jid=candidate['id']
                     db.execute('UPDATE jobs SET payload=?,updated=? WHERE id=?',(json.dumps(merged,ensure_ascii=False),now,jid))
                     db.execute('INSERT INTO co_gather_events(event,job_id) VALUES(?,?)',(event,jid))

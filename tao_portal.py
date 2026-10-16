@@ -17,7 +17,9 @@ from flask import Blueprint, jsonify, request, send_from_directory
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from co_flow import (Queue, PRIVATE_CO_OWNER, MEMBER_CO_GROUP, DISABLED_CO_GROUP,
-                     BotUnavailable, CONFIRM_SECONDS, BOT_OFF_NOTICE)
+                     BotUnavailable, CONFIRM_SECONDS, BOT_OFF_NOTICE, MAX_BATCH_ROWS,
+                     GATHER_SECONDS, add_requester_note)
+from tao_compose import parse_editable, validate_rows, queue_payload, STATUSES
 from co_health import readiness
 from co_results import items, decode_results
 from co_regions import region_label, cluster_condition, stores
@@ -25,7 +27,7 @@ from co_conditions import load_conditions, fold, condition_text
 from co_summary import aggregate, period, TZ
 from co_summary_view import details as summary_details
 
-VERSION = 3
+VERSION = 4
 COOKIE = '__Host-tao_session'
 SESSION_SECONDS = 900
 ROOT = Path(__file__).resolve().parent
@@ -204,6 +206,9 @@ def install(app, reply, default_users=()):
                 'updated':job['updated'],'expires_at':deadline,'rows':[],
                 'can_confirm':job['state']=='draft' and bool(deadline and deadline>time.time()) and job['chat']!=DISABLED_CO_GROUP,
                 'can_cancel':job['state'] in WAITING}
+        result['can_ack_preview']=bool(details and job['owner']==user['uid'] and payload.get('portal_requests')
+            and job['state']=='draft' and job['result']=='MWG_PREVIEW' and not job['notified'])
+        if result['can_ack_preview']:result['preview_revision']=unknown_revision(job)
         policies=load_conditions() if details and any('iphone' in fold(x.get('product_name','')) for x in rows) else {}
         for item,outcome in zip(rows,results):
             public={k:item.get(k,'') for k in ('source','destination','source_name','destination_name','product','product_name','quantity','status')}
@@ -229,7 +234,8 @@ def install(app, reply, default_users=()):
 
     @bp.before_request
     def guard():
-        if request.path.startswith('/tao/api/') and request.content_length and request.content_length>16384:
+        limit=65536 if request.path.startswith('/tao/api/compose/') else 16384
+        if request.path.startswith('/tao/api/') and request.content_length and request.content_length>limit:
             raise PortalError('Yêu cầu quá lớn.',413)
 
     @bp.after_request
@@ -316,6 +322,92 @@ def install(app, reply, default_users=()):
         with q.db() as db:
             found=db.execute('SELECT * FROM jobs WHERE '+scope+' ORDER BY updated DESC,id LIMIT 21 OFFSET ?',tuple(params+[offset])).fetchall()
         return jsonify(jobs=[public_job(dict(j),user) for j in found[:20]],more=len(found)>20,offset=offset,server_time=time.time())
+
+    @bp.get('/api/compose')
+    def compose_options():
+        user=identity()
+        scopes=[{'value':'group','label':'Nhóm TÁO - CÔNG CỤ HỖ TRỢ'}]
+        if user['uid']==PRIVATE_CO_OWNER:scopes.append({'value':'private','label':'Tin nhắn riêng với bot (Tâm)'} )
+        return jsonify(statuses=STATUSES,max_rows=MAX_BATCH_ROWS,scopes=scopes)
+
+    def compose_review(data,user,parse=False):
+        try:
+            review=parse_editable(data.get('text')) if parse else validate_rows(data.get('rows'),MAX_BATCH_ROWS)
+            # Same mandatory contact note as LINE, counted before accepting the form.
+            suffix='Mọi thắc mắc liên hệ '+' '.join(user['name'].split())
+            for row,bad in zip(review['rows'],review['errors']):
+                note=row['note']
+                if not (note==suffix or note.endswith(' '+suffix) or note.endswith('\n'+suffix)):
+                    note+=(' ' if note else '')+suffix
+                if len(note)>500:bad['note']='Note gồm thông tin liên hệ vượt 500 ký tự. Vui lòng rút gọn.'
+            review['valid']=not any(review['errors']) and not review['global_errors']
+            return review
+        except ValueError as error:raise PortalError(str(error)) from None
+
+    @bp.post('/api/compose/parse')
+    def compose_parse():
+        user=identity(True);rate(('compose-parse',user['uid']),20)
+        return jsonify(**compose_review(body(),user,True))
+
+    @bp.post('/api/compose/validate')
+    def compose_validate():
+        user=identity(True);rate(('compose-validate',user['uid']),40)
+        return jsonify(**compose_review(body(),user))
+
+    def compose_event(key,user):
+        if not isinstance(key,str) or not re.fullmatch(r'[a-f0-9]{32}',key):
+            raise PortalError('Mã lần gửi không hợp lệ. Hãy mở lại form.')
+        return 'tao:'+user['uid']+':'+key
+
+    @bp.get('/api/compose/submissions/<key>')
+    def compose_submission(key):
+        user=identity();event=compose_event(key,user)
+        with q.db() as db:
+            job=db.execute('SELECT * FROM jobs WHERE event=? AND owner=?',(event,user['uid'])).fetchone()
+            if not job:
+                job=db.execute('SELECT j.* FROM jobs j JOIN co_gather_events e ON e.job_id=j.id WHERE e.event=? AND j.owner=?',(event,user['uid'])).fetchone()
+            skipped=bool(db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',(hashlib.sha256(event.encode()).hexdigest(),)).fetchone())
+        return jsonify(found=bool(job),skipped=skipped,job=public_job(dict(job),user,True) if job else None)
+
+    @bp.post('/api/compose/submit')
+    def compose_submit():
+        user=identity(True);rate(('compose-submit',user['uid']),12);data=body()
+        event=compose_event(data.get('key'),user);scope=data.get('scope')
+        if scope=='group':chat=MEMBER_CO_GROUP
+        elif scope=='private' and user['uid']==PRIVATE_CO_OWNER:chat=user['uid']
+        else:raise PortalError('Bạn không có quyền gửi yêu cầu vào cuộc chat này.',403)
+        operation_allowed({'chat':chat},user)
+        review=compose_review(data,user)
+        if not review['valid']:return jsonify(error='Sửa các ô báo lỗi trước khi gửi.',review=review),400
+        fingerprint=hashlib.sha256(json.dumps({'scope':scope,'rows':review['rows']},sort_keys=True,
+                                             separators=(',',':')).encode()).hexdigest()
+        try:
+            payload=queue_payload(review);add_requester_note(payload,user['name'])
+            gather=int(os.getenv('CO_GATHER_SECONDS',str(GATHER_SECONDS)))
+            job=q.draft(event,user['uid'],chat,payload,check_product=True,require_online=True,
+                        check_duplicates=True,gather_seconds=gather,request_fingerprint=fingerprint)
+        except (ValueError,BotUnavailable) as error:raise PortalError(str(error),409) from None
+        if job['state']=='skipped':return jsonify(skipped=True,message=job['result'])
+        return jsonify(job=public_job(job,user,True),server_time=time.time(),
+                       message='Đã nhận yêu cầu, đang lấy dữ liệu từ MWG. Kiểm tra thông tin rồi bấm Xác nhận để tạo CO.')
+
+    @bp.post('/api/jobs/<jid>/preview-seen')
+    def preview_seen(jid):
+        user=identity(True);job=get_job(jid,user);operation_allowed(job,user)
+        revision=body().get('revision')
+        if not isinstance(revision,str):raise PortalError('Thiếu bản xác nhận đang hiển thị.')
+        with q.db() as db:
+            row=db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
+            if not row or row['owner']!=user['uid'] or not json.loads(row['payload']).get('portal_requests'):
+                raise PortalError('Chỉ người gửi được ghi nhận đã xem form của mình.',403)
+            if row['state']=='draft' and row['result']=='MWG_PREVIEW' and row['notified']:
+                pass  # LINE or another tab already started the same one-minute deadline.
+            elif (row['state']!='draft' or row['result']!='MWG_PREVIEW'
+                    or time.time()>=row['created']+300 or not hmac.compare_digest(revision,unknown_revision(dict(row)))):
+                raise PortalError('Bản xác nhận đã thay đổi hoặc hết hạn. Tải lại để kiểm tra.',409)
+            else:
+                db.execute("UPDATE jobs SET created=?,notified=1 WHERE id=? AND state='draft' AND notified=0",(time.time(),jid))
+        return jsonify(job=public_job(get_job(jid,user),user,True),server_time=time.time())
 
     @bp.get('/api/jobs/<jid>')
     def job_detail(jid):
