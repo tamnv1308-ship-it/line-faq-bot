@@ -257,9 +257,9 @@ class Queue:
         policies=load_conditions() if any(condition_text(row) for row in rows) else {}
         return preview_text(job,len(codes),policies)
 
-    def unavailable(self, db):
+    def unavailable(self, db, owner=None):
         row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
-        if not row['enabled']:
+        if not row['enabled'] and owner!=PRIVATE_CO_OWNER:
             return BOT_OFF_NOTICE+'\n\nBot đang tạm ngừng nhận CO. Chưa lưu yêu cầu; vui lòng gửi lại khi bot hoạt động.'
         if time.time()-row['heartbeat']>30:
             return 'Bot trên Mac đang offline hoặc mất kết nối. Chưa nhận yêu cầu CO; vui lòng gửi lại khi Mac hoạt động.'
@@ -280,7 +280,7 @@ class Queue:
         with self.db() as db:
             if command=='BOT OFF':
                 db.execute('UPDATE co_control SET enabled=0 WHERE id=1')
-                return BOT_OFF_NOTICE+'\n\nĐã tắt nhận CO mới và tạm dừng lấy việc từ hàng chờ. Việc đang xử lý vẫn hoàn tất; yêu cầu cũ được giữ lại. !bot on để mở lại.'
+                return BOT_OFF_NOTICE+'\n\nĐã chuyển sang chế độ chỉ Tâm 258330 được gửi và tạo CO. Yêu cầu đang xử lý vẫn hoàn tất; hàng chờ của người khác được tạm dừng. !bot on để mở lại theo quyền hiện tại.'
             if command=='BOT ON':
                 row=db.execute('SELECT heartbeat FROM co_control WHERE id=1').fetchone()
                 if time.time()-row['heartbeat']>30:
@@ -303,7 +303,8 @@ class Queue:
             health=readiness(db)
             waiting=sum(counts.get(k,0) for k in ('draft','queued','verified_queued','preview_queued'))
             active=sum(counts.get(k,0) for k in ('preview_running','running','submitting'))
-            return (f"Mac: {'online' if online else 'offline'}\nBOT: {health['worker_label']}\nNhận CO: {'BẬT' if health['accepting'] else 'TẮT'}\n"
+            intake='BẬT' if health['accepting'] else 'CHỈ TÂM 258330' if not row['enabled'] and health['mwg_ready'] else 'TẮT'
+            return (f"Mac: {'online' if online else 'offline'}\nBOT: {health['worker_label']}\nNhận CO: {intake}\n"
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
     def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0):
@@ -324,7 +325,7 @@ class Queue:
             if db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',(hashlib.sha256(event.encode()).hexdigest(),)).fetchone():
                 raise DuplicateRequest('Tin nhắn này đã được xử lý trước đó; không tạo lại.')
             if require_online:
-                reason=self.unavailable(db)
+                reason=self.unavailable(db,owner)
                 if reason:raise BotUnavailable(reason)
             if check_duplicates:
                 candidates=db.execute("SELECT id,payload,state,created,result,notified FROM jobs WHERE state IN ('draft','queued','verified_queued','preview_queued','preview_running','running','submitting','unknown')").fetchall()
@@ -412,11 +413,13 @@ class Queue:
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
             if require_online and not cancel:
-                reason=self.unavailable(db)
+                reason=self.unavailable(db,owner)
                 if reason:raise BotUnavailable(reason)
             job = db.execute('SELECT * FROM jobs WHERE id=?'+('' if owner==PRIVATE_CO_OWNER else ' AND owner=? AND chat=?'),(jid,) if owner==PRIVATE_CO_OWNER else (jid,owner,chat)).fetchone()
             if not job:
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
+            if not cancel and owner==PRIVATE_CO_OWNER and job['owner']!=PRIVATE_CO_OWNER and not db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled']:
+                return 'Đang ở chế độ chỉ xử lý yêu cầu của Tâm 258330. Dùng !bot on để xác nhận yêu cầu của người khác.'
             if job['state']=='expired':
                 return cancelled(f'Xác nhận {jid} đã hết hạn. Yêu cầu đã tự hủy; chưa tạo CO.\n'+lock_notice(db,job['owner'],time.time(),PRIVATE_CO_OWNER))
             if cancel and job['state'] in {'queued','preview_queued','verified_queued'}:
@@ -440,11 +443,12 @@ class Queue:
         now = time.time()
         with self.db() as db:
             if require_online and not cancel:
-                reason=self.unavailable(db)
+                reason=self.unavailable(db,owner)
                 if reason:raise BotUnavailable(reason)
             expire_drafts(db,now,PRIVATE_CO_OWNER)
-            jobs = db.execute("SELECT id,payload FROM jobs WHERE (owner=? OR ?= 'U60751d1a57eb4707a3dff9c06f3240a4') AND chat=? AND state='draft' ORDER BY created,id",
-                              (owner,owner,chat)).fetchall()
+            manage_all=owner==PRIVATE_CO_OWNER and bool(db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled'])
+            jobs = db.execute("SELECT id,payload FROM jobs WHERE (owner=? OR ?=1) AND chat=? AND state='draft' ORDER BY created,id",
+                              (owner,int(manage_all or (cancel and owner==PRIVATE_CO_OWNER)),chat)).fetchall()
             if not jobs:
                 return 'Không có yêu cầu còn hiệu lực đang chờ xác nhận của bạn trong cuộc chat này.'
             state = 'cancelled' if cancel else 'queued'
@@ -457,7 +461,7 @@ class Queue:
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,now))
                 return None
             action = 'Đã hủy' if cancel else 'Đã xác nhận'
-            scope='của mọi người' if owner==PRIVATE_CO_OWNER else 'của bạn'
+            scope='của mọi người' if manage_all or (cancel and owner==PRIVATE_CO_OWNER) else 'của bạn'
             message = f'{action} {len(jobs)} yêu cầu đang chờ {scope} trong cuộc chat này.'
             if not cancel:
                 message += ' Máy Mac sẽ xử lý lần lượt và trả kết quả từng yêu cầu.' + self.blocked_notice(db)
@@ -483,11 +487,21 @@ class Queue:
     def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False, recovery_protocol=False, page_ready=False):
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
+            owner_only=not db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled']
             if prepared_id:
-                prepared=db.execute('SELECT state FROM jobs WHERE id=?',(prepared_id,)).fetchone()
+                prepared=db.execute('SELECT * FROM jobs WHERE id=?',(prepared_id,)).fetchone()
                 if not prepared or prepared['state'] not in {'draft','queued','verified_queued'}:
                     return {'release_preview':True}
-            if require_online and self.unavailable(db):
+                if owner_only and prepared['owner']!=PRIVATE_CO_OWNER:
+                    # The page can now serve the owner. Others must get a fresh
+                    # import and confirmation after BOT ON, never a stale click.
+                    payload=json.loads(prepared['payload'])
+                    payload['preview_generation']=payload.get('preview_generation',0)+1
+                    payload.pop('preview_receipt',None)
+                    db.execute("UPDATE jobs SET state='preview_queued',lease=NULL,result='',notified=0,payload=?,updated=? WHERE id=?",
+                               (json.dumps(payload,ensure_ascii=False),time.time(),prepared_id))
+                    return {'release_preview':True}
+            if require_online and self.unavailable(db,PRIVATE_CO_OWNER):
                 return None
             # Preserve the existing stale-queue safeguard; confirmation TTL is separate.
             db.execute("UPDATE jobs SET state='expired',updated=? WHERE state IN ('queued','preview_queued','verified_queued') AND created<?",(time.time(),time.time()-300))
@@ -516,7 +530,7 @@ class Queue:
                     return {'release_preview':True}
                 job=prepared
             else:
-                job = next((row for row in db.execute("SELECT j.* FROM jobs j LEFT JOIN co_gather_windows w ON w.job_id=j.id WHERE j.state IN "+eligible+" AND (w.closes IS NULL OR w.closes<=?) ORDER BY j.created,j.id",(time.time(),)).fetchall() if not conflicts(row)),None)
+                job = next((row for row in db.execute("SELECT j.* FROM jobs j LEFT JOIN co_gather_windows w ON w.job_id=j.id WHERE j.state IN "+eligible+" AND (w.closes IS NULL OR w.closes<=?) AND (?=0 OR j.owner=?) ORDER BY j.created,j.id",(time.time(),int(owner_only),PRIVATE_CO_OWNER)).fetchall() if not conflicts(row)),None)
             if not job or conflicts(job):
                 return None
             if 'items' in json.loads(job['payload']) and not batch_protocol:
@@ -663,10 +677,14 @@ class Queue:
     def notifications(self):
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
-            return [dict(x) for x in db.execute("SELECT * FROM jobs WHERE (state IN ('succeeded','failed','unknown') OR (state='draft' AND result='MWG_PREVIEW') OR (state='expired' AND result LIKE 'Hết hạn xác nhận%')) AND notified=0")]
+            enabled=db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled']
+            return [dict(x) for x in db.execute("SELECT * FROM jobs WHERE (state IN ('succeeded','failed','unknown') OR (state='draft' AND result='MWG_PREVIEW') OR (state='expired' AND result LIKE 'Hết hạn xác nhận%')) AND notified=0 AND (state!='draft' OR ?=1 OR owner=?)",(int(enabled),PRIVATE_CO_OWNER))]
 
-    def mark_notified(self, jid, state=None):
+    def mark_notified(self, jid, state=None, expected_updated=None):
         with self.db() as db:
+            if expected_updated is not None:
+                current=db.execute('SELECT updated FROM jobs WHERE id=?',(jid,)).fetchone()
+                if not current or current['updated']!=expected_updated:return
             # Start the full minute only after LINE accepts the confirmation.
             if state in (None,'draft'):
                 db.execute("UPDATE jobs SET created=? WHERE id=? AND state='draft' AND notified=0",(time.time(),jid))
@@ -765,7 +783,9 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
-                       late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3)
+                       late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3,
+                       owner_only_off_version=1, intake_mode='normal' if control['enabled'] else 'owner_only',
+                       owner_accepting=health['mwg_ready'])
 
     @app.post('/co/worker/conditions/reload')
     def conditions_reload():
@@ -821,7 +841,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 except Exception:
                     app.logger.warning('CO preview reply failed.')
             if replied:
-                queue.mark_notified(job['id'],job['state'])
+                queue.mark_notified(job['id'],job['state'],job['updated'])
             else:
                 fallback.append((job,text))
         # Do not silently hold an expiring LINE reply while MWG/Mac is slow.
@@ -834,18 +854,21 @@ def install(app, reply, push, default_users=(), requester_name=None):
         # At most one push per tick so old failed deliveries cannot block new replies.
         fallback.sort(key=lambda item:(item[0]['state']!='draft',-item[0]['updated']))
         for job,text in fallback:
-            key=(job['id'],job['state'])
+            payload=json.loads(job['payload'])
+            generation=payload.get('preview_generation',0) if job['state']=='draft' else 0
+            key=(job['id'],job['state'],generation)
             if time.monotonic()<next_notice.get(key,0):
                 continue
             next_notice[key]=time.monotonic()+60
             import uuid
             suffix=':preview' if job['state']=='draft' else ''
-            if json.loads(job['payload']).get('late_reconciliation'):
+            if generation:suffix+=':'+str(generation)
+            if payload.get('late_reconciliation'):
                 suffix=':reconciled:'+job['state']
             retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-result:'+job['id']+suffix))
             try:
                 if push(job['chat'],text,retry_key):
-                    queue.mark_notified(job['id'],job['state'])
+                    queue.mark_notified(job['id'],job['state'],job['updated'])
                     next_notice.pop(key,None)
             except Exception:
                 app.logger.warning('CO notification pending; will retry.')
@@ -886,7 +909,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             if adm in {'HUY CHO ALL','HUY CHỜ ALL'} and owner!=PRIVATE_CO_OWNER:
                 reply(event.reply_token,'Chỉ chủ bot được hủy yêu cầu của người khác.'); return True
             if adm=='LISTADM':
-                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — tắt nhận CO và tạm dừng hàng chờ\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!ketqua — lấy tối đa 10 CO chưa báo trong nhóm NOTE\n!mokhoa — danh sách khóa CO (chỉ Tâm)\n!mokhoa <số> — mở khóa và reset lần quá hạn (chỉ Tâm)\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
+                reply(event.reply_token, 'Lệnh ADM (chỉ ADM dùng được):\n!bot off — chỉ Tâm 258330 được gửi và tạo CO\n!bot on — bật khi Mac online\n!bot status — trạng thái Mac và hàng chờ\n!huy cho all — hủy toàn bộ yêu cầu chưa xử lý của mọi người, mọi chat\n!ketqua — lấy tối đa 10 CO chưa báo trong nhóm NOTE\n!mokhoa — danh sách khóa CO (chỉ Tâm)\n!mokhoa <số> — mở khóa và reset lần quá hạn (chỉ Tâm)\n!listadm — xem hướng dẫn này\n!say <mã nhóm> | <nội dung> — gửi tin tới nhóm\n!list — danh sách từ khóa\n!reload — tải lại dữ liệu\n!test / !testreport / !sendall — lệnh báo cáo hiện có\nBOT OFF không hủy CO đã tạo và không dừng thao tác đang chạy.')
                 return True
             if not enabled:
                 reply(event.reply_token,'Chức năng CO chưa được cấu hình.'); return True
