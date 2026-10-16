@@ -749,6 +749,31 @@ def ensure_browser(pw, context, page, background=False):
             raise
         return open_browser(pw, background=background)
 
+def find_idle_mwg_page(context, page, guard, prepared_id=None):
+    """Follow a login-created tab only when no current CO state can be lost."""
+    if prepared_id or guard.uncertain_job is not None or guard.late_submissions:
+        return page
+    if (ROOT/'pending.json').exists() or guard.pending:
+        return page
+    def on_mwg(candidate):
+        return (not candidate.is_closed() and
+                candidate.url.split('?',1)[0].split('#',1)[0].rstrip('/')==URL)
+    try:
+        if on_mwg(page):return page
+        candidates=[candidate for candidate in context.pages if candidate is not page and on_mwg(candidate)]
+        # Multiple open CO forms are ambiguous; never pick a form arbitrarily.
+        if len(candidates)!=1:return page
+        states=api('status',None)['states']
+        if any(states.get(state,0) for state in ('draft','preview_running','running','submitting')):
+            return page
+        if not guard.track_submissions and states.get('unknown',0):return page
+        if (ROOT/'pending.json').exists():return page
+        print('Đã nhận đúng thẻ tạo CO sau đăng nhập; giữ nguyên phiên MWG.',flush=True)
+        return candidates[0]
+    except Exception:
+        # Discovery is optional: a closed tab or unavailable status cannot stop the worker.
+        return page
+
 def start_heartbeat():
     stop=threading.Event()
     def pulse():
@@ -894,6 +919,7 @@ def main():
                         check_stop()
                         reconcile_late_submissions(guard)
                         context,page=ensure_browser(pw,context,page,background=args.background)
+                        page=find_idle_mwg_page(context,page,guard,prepared_id)
                         if page.url in ('about:blank','chrome://newtab/'):
                             try:
                                 health_state('loading')
