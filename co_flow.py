@@ -7,6 +7,7 @@ import re
 import secrets
 import sqlite3
 import time
+import co_observability as observe
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -180,6 +181,7 @@ class Queue:
                 id INTEGER PRIMARY KEY, state TEXT NOT NULL, progress_at REAL NOT NULL);
               INSERT INTO co_worker_health(id,state,progress_at) VALUES(1,'unverified',0) ON CONFLICT(id) DO NOTHING;
             ''')
+            observe.schema(db)
 
     @contextmanager
     def db(self):
@@ -394,6 +396,7 @@ class Queue:
             jid = secrets.token_hex(5)
             db.execute('INSERT INTO jobs(id,event,owner,chat,payload,state,created,updated) VALUES(?,?,?,?,?,?,?,?)',
                        (jid,event,owner,chat,json.dumps(payload,ensure_ascii=False),'preview_queued' if check_product else 'draft',now,now))
+            observe.record(db,jid,'received',at=now)
             if check_product and gather_seconds:
                 db.execute('INSERT INTO co_gather_windows(job_id,closes) VALUES(?,?)',(jid,now+gather_seconds))
             if check_product and reply_token:
@@ -439,6 +442,7 @@ class Queue:
                 return 'Yêu cầu đã được xử lý hoặc hủy; không tạo thêm bản trùng.'
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
+            observe.record(db,jid,'cancelled' if cancel else 'confirmed',key=job['created'])
             if not cancel and reply_token and job['chat']==chat:
                 db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,time.time()))
@@ -461,6 +465,7 @@ class Queue:
             for job in jobs:
                 target='cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
                 db.execute("UPDATE jobs SET state=?,updated=? WHERE id=? AND state='draft'",(target,now,job['id']))
+                observe.record(db,job['id'],'cancelled' if cancel else 'confirmed',key=now,at=now)
             if not cancel and reply_token and len(jobs)==1:
                 jid=jobs[0]['id']
                 db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
@@ -544,6 +549,7 @@ class Queue:
             lease = secrets.token_urlsafe(24)
             preview=job['state']=='preview_queued'
             db.execute("UPDATE jobs SET state=?,lease=?,updated=? WHERE id=?",('preview_running' if preview else 'running',lease,time.time(),job['id']))
+            observe.record(db,job['id'],'preview_claimed' if preview else 'create_claimed',key=lease)
             return {'id':job['id'],'lease':lease,'payload':json.loads(job['payload']),'mode':'preview' if preview else 'create'}
 
     def update(self, jid, lease, state, result=''):
@@ -589,6 +595,7 @@ class Queue:
                 now=time.time()
                 db.execute("UPDATE jobs SET state='draft',payload=?,result='MWG_PREVIEW',created=?,updated=?,notified=0 WHERE id=?",
                            (json.dumps(payload,ensure_ascii=False),now,now,jid))
+                observe.record(db,jid,'preview_ready',key=lease,at=now)
                 return True
             if state in {'succeeded','failed','unknown'} and result.startswith('['):
                 try:
@@ -629,6 +636,10 @@ class Queue:
             elif state not in allowed.get(job['state'], set()):
                 return False
             db.execute('UPDATE jobs SET state=?,result=?,updated=?,notified=0 WHERE id=?',(state,result,time.time(),jid))
+            observe.record(db,jid,'submitting' if state=='submitting' else 'result_received',
+                           key=lease+':'+state+':'+hashlib.sha256(result.encode()).hexdigest(),
+                           outcome='error' if state in {'failed','unknown'} else 'ok',
+                           error_code=observe.classify(result) if state in {'failed','unknown'} else '')
             if state in {'succeeded','unknown'}:
                 completed=dict(job); completed.update(state=state,result=result)
                 message=note_group_text(completed)
@@ -706,11 +717,29 @@ class Queue:
             enabled=db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled']
             return [dict(x) for x in db.execute("SELECT * FROM jobs WHERE (state IN ('succeeded','failed','unknown') OR (state='draft' AND result='MWG_PREVIEW') OR (state='expired' AND result LIKE 'Hết hạn xác nhận%')) AND notified=0 AND (state!='draft' OR ?=1 OR owner=?)",(int(enabled),PRIVATE_CO_OWNER))]
 
+    def observe_worker(self, events):
+        if not events:return []
+        try:
+            with self.db() as db:return observe.ingest(db,events)
+        except Exception:
+            return []  # Optional diagnostics never fail a heartbeat or saved result.
+
+    def notice_failed(self, job):
+        try:
+            with self.db() as db:
+                observe.record(db,job['id'],'notification_failed',key=str(job['updated'])+':'+str(int(time.time()//60)),
+                               outcome='error',error_code='line_delivery')
+        except Exception:pass
+
     def mark_notified(self, jid, state=None, expected_updated=None):
         with self.db() as db:
             if expected_updated is not None:
                 current=db.execute('SELECT updated FROM jobs WHERE id=?',(jid,)).fetchone()
                 if not current or current['updated']!=expected_updated:return
+            before=db.execute('SELECT state,notified,updated,lease FROM jobs WHERE id=?',(jid,)).fetchone()
+            if before and not before['notified'] and (state is None or state==before['state']):
+                observe.record(db,jid,'confirmation_delivered' if before['state']=='draft' else 'result_delivered',
+                               key=str(before['updated'])+':'+str(before['lease']))
             # Start the full minute only after LINE accepts the confirmation.
             if state in (None,'draft'):
                 db.execute("UPDATE jobs SET created=? WHERE id=? AND state='draft' AND notified=0",(time.time(),jid))
@@ -768,6 +797,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
     @app.post('/co/worker/heartbeat')
     def heartbeat():
         authenticated()
+        if request.content_length and request.content_length>65536:abort(413)
         body=request.get_json(silent=True) or {}
         if not isinstance(body,dict):abort(400)
         health=body.get('health',{'state':'unverified','progress_age_seconds':0})
@@ -775,7 +805,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
             validate_health(health)
             queue.heartbeat(body.get('online') is True,health)
         except ValueError:abort(400)
-        return jsonify(ok=True)
+        ack=queue.observe_worker(body.get('telemetry',[]))
+        return jsonify(ok=True,telemetry_ack=ack,observability_version=observe.VERSION)
 
     @app.post('/co/worker/store-directory')
     def store_directory_update():
@@ -811,7 +842,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
                        late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3,
                        owner_only_off_version=1, intake_mode='normal' if control['enabled'] else 'owner_only',
-                       owner_accepting=health['mwg_ready'])
+                       owner_accepting=health['mwg_ready'],observability_version=observe.VERSION)
 
     @app.post('/co/worker/conditions/reload')
     def conditions_reload():
@@ -846,7 +877,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
             abort(400)
         if not queue.update(data.get('id'),data.get('lease'),state,message):
             abort(409)
-        return jsonify(ok=True)
+        ack=queue.observe_worker(data.get('telemetry',[]))
+        return jsonify(ok=True,telemetry_ack=ack)
 
     next_notice={}
 
@@ -896,7 +928,9 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 if push(job['chat'],text,retry_key):
                     queue.mark_notified(job['id'],job['state'],job['updated'])
                     next_notice.pop(key,None)
+                else:queue.notice_failed(job)
             except Exception:
+                queue.notice_failed(job)
                 app.logger.warning('CO notification pending; will retry.')
             break
 

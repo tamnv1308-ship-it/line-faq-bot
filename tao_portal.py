@@ -20,6 +20,7 @@ from co_flow import (Queue, PRIVATE_CO_OWNER, MEMBER_CO_GROUP, DISABLED_CO_GROUP
                      BotUnavailable, CONFIRM_SECONDS, BOT_OFF_NOTICE, MAX_BATCH_ROWS,
                      GATHER_SECONDS, add_requester_note)
 from tao_compose import parse_editable, validate_rows, queue_payload, STATUSES
+import co_observability as observe
 from co_health import readiness
 from co_results import items, decode_results
 from co_regions import region_label, cluster_condition, stores
@@ -222,6 +223,9 @@ def install(app, reply, default_users=()):
                 public['conditions']=(policy.splitlines()[1:] if policy else [])+[label,cluster_condition(item)]
             result['rows'].append(public)
         if details:
+            if user['uid']==PRIVATE_CO_OWNER:
+                with q.db() as db:events=observe.read_events(db,job['id'])
+                result['diagnostics']=observe.timeline(job,events)
             result['skipped_duplicates']=payload.get('skipped_duplicates',[])
             result['skipped_errors']=payload.get('skipped_errors',[])
             if user['uid']==PRIVATE_CO_OWNER and job['state']=='unknown':
@@ -304,6 +308,11 @@ def install(app, reply, default_users=()):
         return jsonify(name=user['name'],owner=user['uid']==PRIVATE_CO_OWNER,admin=user['uid'] in admins,
                        csrf=user['csrf'],expires_at=user['exp'],health=health,enabled=enabled,
                        notice=BOT_OFF_NOTICE if not enabled and user['uid']!=PRIVATE_CO_OWNER else '')
+
+    @bp.get('/api/admin/operations')
+    def operations():
+        user=identity();require_owner(user);rate(('operations',user['uid']),30)
+        return jsonify(observe.overview(q))
 
     @bp.get('/api/jobs')
     def jobs():
@@ -407,6 +416,7 @@ def install(app, reply, default_users=()):
                 raise PortalError('Bản xác nhận đã thay đổi hoặc hết hạn. Tải lại để kiểm tra.',409)
             else:
                 db.execute("UPDATE jobs SET created=?,notified=1 WHERE id=? AND state='draft' AND notified=0",(time.time(),jid))
+                observe.record(db,jid,'confirmation_delivered',key=str(row['updated'])+':'+str(row['lease']))
         return jsonify(job=public_job(get_job(jid,user),user,True),server_time=time.time())
 
     @bp.get('/api/jobs/<jid>')

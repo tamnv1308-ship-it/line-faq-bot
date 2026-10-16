@@ -66,13 +66,14 @@ def cleanup(queue,directory):
     image_cutoff=period('7ngay')[0].timestamp()
     cutoff=(datetime.now(TZ).replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=29)).timestamp()
     with queue.db() as db:
+        db.execute('DELETE FROM co_ops_events WHERE received<?',(cutoff,))
         ids=[r['id'] for r in db.execute("SELECT id FROM jobs WHERE state IN ('succeeded','failed','cancelled','expired') AND created<? AND updated<?",(cutoff,cutoff))]
         for jid in ids:
             row=db.execute('SELECT event FROM jobs WHERE id=?',(jid,)).fetchone()
             db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',(hashlib.sha256(row['event'].encode()).hexdigest(),))
             for event in db.execute('SELECT event FROM co_gather_events WHERE job_id=?',(jid,)).fetchall():
                 db.execute('INSERT INTO co_event_tombstones(digest) VALUES(?) ON CONFLICT(digest) DO NOTHING',(hashlib.sha256(event['event'].encode()).hexdigest(),))
-            for table in ('preview_replies','co_note_rows','co_note_outbox','co_gather_events','co_gather_windows'):db.execute('DELETE FROM '+table+' WHERE job_id=?',(jid,))
+            for table in ('co_ops_events','preview_replies','co_note_rows','co_note_outbox','co_gather_events','co_gather_windows'):db.execute('DELETE FROM '+table+' WHERE job_id=?',(jid,))
             db.execute('DELETE FROM jobs WHERE id=?',(jid,))
     if directory.exists():
         for p in directory.glob('*.png'):

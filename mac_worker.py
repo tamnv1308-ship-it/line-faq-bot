@@ -4,19 +4,34 @@ import fcntl
 import json
 import os
 import re
+import socket
 import time
 import threading
-import atexit
 import urllib.request
+import urllib.error
 from pathlib import Path
 from co_results import items
 from transfer_parser import normalize_status
+from worker_runtime import Runtime
+from mwg_submit_capture import CreateCapture, merge_results
 
 URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
 TEMPLATE = Path(__file__).resolve().parent / 'templates' / 'StoreChangeOrderTGDD_template.xlsx'
+RUNTIME = None
+TELEMETRY = None
+
+def health_state(state):
+    if RUNTIME is not None:RUNTIME.set(state)
+
+def check_stop():
+    if RUNTIME is not None:RUNTIME.check_stop()
 
 def progress(job, stage):
+    health_state('processing')
+    if TELEMETRY is not None:
+        try:TELEMETRY.progress(job,stage)
+        except Exception:pass
     # Do not log tokens, form notes, or customer data.
     ROOT.mkdir(exist_ok=True)
     line=time.strftime('%Y-%m-%d %H:%M:%S')+' '+job['id']+' '+stage
@@ -24,11 +39,84 @@ def progress(job, stage):
     with (ROOT/'worker-progress.log').open('a') as stream:
         stream.write(line+'\n')
 
+def capture_failure(page, label):
+    """Keep local evidence for failures; diagnostics must never block reporting."""
+    try:
+        if page.is_closed() or page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
+            return
+        folder=ROOT/'diagnostics';folder.mkdir(mode=0o700,exist_ok=True)
+        name=re.sub(r'[^a-zA-Z0-9_-]','_',str(label))[:60]
+        target=folder/(name+'.png')
+        page.screenshot(path=str(target),timeout=2000)
+        target.chmod(0o600)
+    except Exception:
+        pass
+
 def upload_excel(page, output):
     # Use the site's import button so its preparation handlers run before upload.
     with page.expect_file_chooser(timeout=15000) as chooser:
         page.get_by_role('button',name=re.compile('Nhập Excel mẫu')).click()
     chooser.value.set_files(str(output))
+
+def import_with_retry(page, job, output, alerts, responses=None):
+    """Retry only an import timeout, before any CO submission is possible."""
+    for attempt in range(2):
+        if attempt:
+            progress(job,'retry_import_after_timeout')
+            page.reload(wait_until='domcontentloaded',timeout=30000)
+            prepare_import_controls(page,job)
+        alerts.clear()
+        requests=set()
+        def on_request(request):
+            from mwg_import_api import IMPORT_URL
+            if (request.method=='POST' and
+                    request.url.split('?',1)[0].rstrip('/').lower()==IMPORT_URL.lower()):
+                requests.add(request)
+        def on_response(response):
+            if response.request in requests:responses.append(response)
+        if responses is not None:
+            responses.clear()
+            page.on('request',on_request)
+            page.on('response',on_response)
+        try:
+            progress(job,'upload_excel')
+            upload_excel(page,output)
+            popup=page.get_by_text('Dữ liệu trong tập tin excel',exact=True)
+            deadline=time.monotonic()+15
+            while True:
+                if alerts:
+                    raise RuntimeError('MWG báo lỗi khi nhập Excel: '+'; '.join(alerts)[-1800:])
+                if popup.is_visible():
+                    return popup
+                if time.monotonic()>=deadline:
+                    break
+                page.wait_for_timeout(250)
+        finally:
+            if responses is not None:
+                for event,handler in (('request',on_request),('response',on_response)):
+                    try:page.remove_listener(event,handler)
+                    except Exception:pass
+    raise RuntimeError('MWG chưa trả kết quả nhập Excel sau 2 lượt chờ, mỗi lượt 15 giây; chưa bấm Tạo CO. Yêu cầu đã dừng.')
+
+def received_import_errors(responses, records):
+    from mwg_import_api import import_row_errors
+    if len(responses)!=1:
+        raise RuntimeError('Chưa nhận được duy nhất phản hồi nhập file từ MWG; chưa tạo CO.')
+    response=responses[0]
+    if response.status!=200:
+        raise RuntimeError('MWG trả lỗi nhập file HTTP '+str(response.status)+'; chưa tạo CO.')
+    try:body=response.json()
+    except Exception:
+        raise RuntimeError('MWG không trả dữ liệu nhập file hợp lệ; kiểm tra phiên đăng nhập. Chưa tạo CO.') from None
+    try:return import_row_errors(body,records)
+    except (ValueError,TypeError,KeyError):
+        # Log schema only, never the response contents or authentication headers.
+        schema={'body_type':type(body).__name__}
+        if isinstance(body,dict):
+            schema['keys']=list(body)
+            if isinstance(body.get('Data'),dict):schema['data_keys']=list(body['Data'])
+        print('Phản hồi nhập MWG chưa khớp: '+json.dumps(schema,ensure_ascii=False),flush=True)
+        raise RuntimeError('Phản hồi nhập MWG không khớp đủ mã kho, mã sản phẩm và số lượng; chưa tạo CO.') from None
 
 def concurrent_rejection(alerts, data):
     for message in alerts:
@@ -40,24 +128,211 @@ def concurrent_rejection(alerts, data):
             return message[:2500]
     return None
 
-def api(route, data):
+
+
+
+
+
+def result_state(rows):
+    if any(row.get('state')=='unknown' or (row['co'] and row['error']) for row in rows):return 'unknown'
+    return 'succeeded' if any(row['co'] for row in rows) else 'failed'
+
+def api(route, data, timeout=30):
     base = os.environ['CO_BOT_URL'].rstrip('/')
     if not base.startswith('https://'):
         raise RuntimeError('CO_BOT_URL must use HTTPS')
     req = urllib.request.Request(base+'/co/worker/'+route, data=None if data is None else json.dumps(data).encode(),
         headers={'Content-Type':'application/json', 'Authorization':'Bearer '+os.environ['CO_WORKER_TOKEN']})
-    with urllib.request.urlopen(req, timeout=30) as response:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 
-def report(job, state, result=''):
+def claim_with_reconnect(data):
+    # Retry polling only; never replay browser actions or CO submission.
+    failures=0
+    while True:
+        check_stop()
+        try:
+            request=dict(data,health=RUNTIME.snapshot()) if RUNTIME is not None else data
+            result=api('claim',request)
+            if failures:
+                print('Đã kết nối lại máy chủ; tiếp tục trên phiên Chrome hiện tại.',flush=True)
+            return result
+        except urllib.error.HTTPError as error:
+            if error.code not in (408,429,500,502,503,504):
+                raise
+        # On Python 3.9 socket.timeout is not a subclass of TimeoutError.
+        # HTTPS response reads can raise it directly, without a URLError wrapper.
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError):
+            pass
+        failures+=1
+        health_state('reconnecting')
+        delay=min(5*failures,30)
+        print('Tạm mất kết nối máy chủ. Giữ nguyên Chrome, thử lại sau '+str(delay)+' giây.',flush=True)
+        time.sleep(delay)
+
+class ResultDeliveryBlocked(RuntimeError):
+    pass
+
+def reconcile_result(record):
+    snapshot=api('result-status',{'id':record['id'],'lease':record['lease']})
+    if not isinstance(snapshot,dict) or not snapshot.get('found'):
+        raise ResultDeliveryBlocked('Không tìm thấy yêu cầu trên máy chủ. Giữ kết quả trên Mac để đối soát.')
+    if (snapshot.get('lease_matches') is True and snapshot.get('state')==record['state']
+            and snapshot.get('result')==record.get('result','')):
+        return
+    # Only a known pre-submit failure may be retired after cancellation/expiry.
+    # Success, unknown outcomes, and submitting barriers must never be discarded.
+    if (record['state']=='failed' and record.get('before_submit') is True
+            and snapshot.get('state') in {'failed','cancelled','expired'}
+            and not re.search(r'[0-9A-Z]+CO[0-9]+',str(snapshot.get('result',''))+record.get('result',''))):
+        folder=ROOT/'result-conflicts';folder.mkdir(mode=0o700,exist_ok=True)
+        destination=folder/(str(time.time_ns())+'.json')
+        with destination.open('x') as stream:
+            os.chmod(destination,0o600)
+            json.dump({'record':record,'server':snapshot},stream,ensure_ascii=False)
+            stream.flush();os.fsync(stream.fileno())
+        print('Đã đối chiếu '+record['id']+': lỗi trước khi tạo CO; máy chủ đã kết thúc yêu cầu. Đã lưu bằng chứng và gỡ kẹt.',flush=True)
+        return
+    raise ResultDeliveryBlocked('Kết quả '+record['id']+' không khớp máy chủ ('+str(snapshot.get('state'))+'). Giữ kết quả trên Mac; cần đối soát, không tạo lại CO.')
+
+def deliver_result(record):
+    """Resend the same durable result only; never repeat MWG creation."""
+    failures=0
+    while True:
+        try:
+            try:
+                reply=api('result',record)
+            except urllib.error.HTTPError as error:
+                if error.code==409:
+                    reconcile_result(record)
+                    return
+                if error.code not in (408,429,500,502,503,504):
+                    raise ResultDeliveryBlocked('Máy chủ từ chối kết quả (HTTP '+str(error.code)+'). Giữ kết quả trên Mac; cần kiểm tra kết nối/cấu hình.') from error
+                raise
+            if TELEMETRY is not None and isinstance(reply,dict):
+                try:TELEMETRY.acknowledge(reply.get('telemetry_ack'))
+                except Exception:pass
+            if not isinstance(reply,dict) or reply.get('ok') is not True:
+                raise RuntimeError('Máy chủ chưa xác nhận đã lưu kết quả')
+            if failures:
+                print('Đã gửi lại kết quả thành công. Giữ nguyên mã CO và phiên Chrome.',flush=True)
+            return
+        except ResultDeliveryBlocked as error:
+            if TELEMETRY is not None:
+                try:TELEMETRY.delivery_error(record,error.__cause__ or error)
+                except Exception:pass
+            health_state('blocked')
+            raise
+        except Exception as error:
+            if TELEMETRY is not None:
+                try:TELEMETRY.delivery_error(record,error)
+                except Exception:pass
+            health_state('reconnecting')
+            check_stop()  # Durable result remains on disk; never replay MWG submission.
+            failures+=1
+            delay=min(5*failures,30)
+            detail='HTTP '+str(error.code) if isinstance(error,urllib.error.HTTPError) else type(error).__name__
+            print('Chưa gửi được kết quả ('+detail+'). Đã lưu trên Mac; thử lại sau '+str(delay)+' giây. Không tạo lại CO.',flush=True)
+            time.sleep(delay)
+
+class RecoveryGuard:
+    """Allow independent work only after this page is visibly and network idle."""
+    def __init__(self,page,track_submissions=True):
+        self.page=page
+        self.track_submissions=track_submissions
+        self.pending=set()
+        self.last_reason=None
+        # Historical unknown jobs stay protected by the server's stock checks.
+        # Only an uncertain submission on THIS page must prevent page repair.
+        self.uncertain_job=None
+        self.late_submissions=[]
+        page.on('request',self.request)
+        page.on('requestfinished',self.finished)
+        page.on('requestfailed',self.finished)
+    def request(self,request):
+        if request.resource_type in ('xhr','fetch'):
+            self.pending.add(request)
+    def finished(self,request):
+        self.pending.discard(request)
+    def ready(self):
+        reason=self.readiness_reason()
+        if reason!=self.last_reason:
+            if reason:print('MWG chưa sẵn sàng: '+reason,flush=True)
+            self.last_reason=reason
+        return reason is None
+    def readiness_reason(self):
+        page=self.page
+        try:
+            if page.is_closed():return 'Cửa sổ đã đóng.'
+            if page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
+                return 'Chưa ở trang tạo CO; kiểm tra đăng nhập MWG.'
+            if self.pending:return 'Còn kết nối dữ liệu đang chờ MWG trả lời.'
+            if page.locator('.k-loading-mask:visible, .blockUI:visible, [aria-busy="true"]:visible').count():
+                return 'Trang đang có lớp chờ tải dữ liệu.'
+            if any(control.is_visible() for control in page.get_by_text(re.compile(r'^\s*Loading(?:\.\.\.)?\s*$',re.I)).all()):
+                return 'Trang đang hiển thị Loading.'
+            button=page.get_by_role('button',name=re.compile('Nhập Excel mẫu'))
+            status=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
+            if not button.is_visible() or not button.is_enabled():return 'Nút Nhập Excel mẫu chưa sẵn sàng.'
+            if not status.is_visible():return 'Chưa hiển thị ô trạng thái sản phẩm.'
+            if normalize_status(status.input_value(timeout=1000)) is None:return 'Ô trạng thái sản phẩm trống hoặc chưa nhận diện được.'
+            if page.get_by_text('Dữ liệu trong tập tin excel',exact=True).is_visible():return 'Bảng nhập Excel vẫn đang mở.'
+            return None
+        except Exception as error:
+            return 'Không đọc được trạng thái trang ('+type(error).__name__+').'
+    def wait_ready(self, timeout=15):
+        deadline=time.monotonic()+timeout
+        stable=None
+        while time.monotonic()<deadline:
+            if self.ready():
+                if stable is None: stable=time.monotonic()
+                elif time.monotonic()-stable>=1: return True
+            else:
+                stable=None
+            try:
+                self.page.wait_for_timeout(250)
+            except Exception as error:
+                if self.page.is_closed() or 'has been closed' in str(error):
+                    return False
+                raise
+        return False
+
+def report(job, state, result='', *, before_submit=False):
+    if TELEMETRY is not None:
+        try:
+            TELEMETRY.finish(job,result if state in {'failed','unknown'} else '')
+            TELEMETRY.progress(job,'send_result')
+        except Exception:pass
     record = {'id':job['id'], 'lease':job['lease'], 'state':state, 'result':result}
+    if TELEMETRY is not None:
+        try:record['telemetry']=TELEMETRY.batch(job)
+        except Exception:pass
+    if before_submit:
+        record['before_submit']=True
     pending = ROOT/'pending.json'
     tmp = ROOT/'pending.tmp'
     with tmp.open('w') as f:
         json.dump(record, f); f.flush(); os.fsync(f.fileno())
     tmp.replace(pending)
-    api('result', record)
+    deliver_result(record)
     pending.unlink()
+    if TELEMETRY is not None:
+        try:TELEMETRY.finish(job)
+        except Exception:pass
+    progress(job,'reported_'+state)
+
+
+def reconcile_late_submissions(guard):
+    for entry in list(guard.late_submissions):
+        job,capture,previous=entry
+        if not capture.done and not capture.page.is_closed():continue
+        if capture.rows is not None and len(capture.requests)==1:
+            resolved=merge_results(previous,capture.rows)
+            if all(row.get('state') in {'succeeded','failed'} for row in resolved):
+                progress(job,'late_create_response_verified')
+                report(job,result_state(resolved),json.dumps(resolved,ensure_ascii=False))
+                if guard.uncertain_job==job['id']:guard.uncertain_job=None
+        capture.close();guard.late_submissions.remove(entry)
 
 def fill_template(source, target, data):
     from openpyxl import load_workbook
@@ -85,9 +360,12 @@ def fill_template(source, target, data):
 def table_with(page, header):
     return page.get_by_role('table').filter(has=page.get_by_role('columnheader',name=header,exact=True))
 
+
 def data_rows(table):
     result=[]
     for row in table.get_by_role('row').all():
+        # Main CO table: read visible cells, not hidden Angular template columns.
+        # The import popup is validated separately from its HTTP response.
         cells=row.get_by_role('cell').all_text_contents()
         if cells and any(value.strip() for value in cells):
             result.append((row,cells))
@@ -112,6 +390,40 @@ def match_rows(rows, records):
         index,cells=candidates[0]; used.add(index); matched.append(cells)
     return matched
 
+def wait_matched_rows(page, table, records, timeout=7):
+    """After accepting import, MWG can briefly show old, partial or unnamed rows."""
+    deadline=time.monotonic()+timeout
+    stable=None
+    signature=None
+    while True:
+        rows=data_rows(table)
+        matched=match_rows(rows,records)
+        now=time.monotonic()
+        if matched is not None and all(cells[4].strip() for cells in matched):
+            current=tuple(tuple(cells) for cells in matched)
+            if current!=signature:
+                signature=current;stable=now
+            elif now-stable>=0.3:
+                return matched
+        else:
+            stable=None;signature=None
+        if now>=deadline:
+            # Only counts and field comparisons, never notes, names or tokens.
+            diagnostic={'expected_rows':len(records),'observed_rows':len(rows),
+                        'cell_counts':[len(cells) for _,cells in rows],
+                        'matches':[]}
+            for data in records:
+                candidates=[cells for _,cells in rows if len(cells)==11 and cells[3].strip()==data['product']]
+                diagnostic['matches'].append([{
+                    'source':bool(re.match(r'^'+re.escape(data['source'])+r'(?:\s*-|\s*$)',cells[1].strip())),
+                    'destination':bool(re.match(r'^'+re.escape(data['destination'])+r'(?:\s*-|\s*$)',cells[2].strip())),
+                    'quantity':cells[5].strip()==str(data['quantity']),
+                    'note':cells[7].strip()==data['note'],
+                    'name':bool(cells[4].strip())} for cells in candidates])
+            print('Đối chiếu bảng CO chưa khớp: '+json.dumps(diagnostic,ensure_ascii=False),flush=True)
+            raise RuntimeError('Dữ liệu trên trang chưa khớp đủ '+str(len(records))+' dòng sau '+str(timeout)+' giây; chưa tạo CO.')
+        page.wait_for_timeout(100)
+
 def cancel_import(page):
     cancel=page.get_by_text('Hủy',exact=True)
     if cancel.is_visible():
@@ -129,6 +441,9 @@ def select_brands(page):
     desired={'1 - thegioididong','2 - dienmayxanh','16 - TopZone'}
     control=page.locator('input[role="listbox"]')
     control.wait_for(state='visible',timeout=15000)
+    owns=(control.get_attribute('aria-owns') or '').split()
+    if owns and {value.strip() for value in page.locator('[id="'+owns[-1]+'"] .k-state-selected').all_text_contents()}==desired:
+        return  # Reuse verified selections without opening/reloading the menu.
     control.click()
     wait_ui(page,lambda: bool(control.get_attribute('aria-owns')),
             'Danh sách thương hiệu chưa sẵn sàng; chưa nhập file.')
@@ -172,15 +487,15 @@ def select_product_status(page, status):
     if normalize_status(control.input_value())!=requested:
         raise RuntimeError('Không xác nhận được trạng thái '+status+'; chưa nhập file.')
 
-def wait_product_status(page, control, timeout=20):
+def wait_product_status(page, control, timeout=7):
     # Require a nonempty value to stay stable for one second, not a transient render.
     deadline=time.monotonic()+timeout
     previous=None
     stable_since=None
     while time.monotonic()<deadline:
-        value=control.input_value().strip() if control.is_visible() else ''
+        value=control.input_value(timeout=max(1,int((deadline-time.monotonic())*1000))).strip() if control.is_visible() else ''
         now=time.monotonic()
-        if value and value==previous:
+        if normalize_status(value) is not None and value==previous:
             if stable_since is not None and now-stable_since>=1:
                 return True
         else:
@@ -191,27 +506,43 @@ def wait_product_status(page, control, timeout=20):
 
 
 def prepare_import_controls(page, job):
-    # Wait for MWG both before and after brand loading before retrying a reload.
+    # MWG loads inventory statuses from the selected brands. Waiting for a
+    # status before selecting brands can deadlock a freshly loaded page.
     control=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
-    for attempt in range(3):
-        if wait_product_status(page,control):
-            progress(job,'select_brands')
+    brand_timeout=False
+    for attempt in range(5):
+        progress(job,'select_brands')
+        try:
             select_brands(page)
-            if wait_product_status(page,control):
-                progress(job,'select_product_status')
-                select_product_status(page,job['payload'].get('status','Mới'))
-                return
-        if attempt<2:
+            brand_timeout=False
+        except Exception as error:
+            if type(error).__name__!='TimeoutError':
+                raise
+            brand_timeout=True
+            if attempt<4:
+                progress(job,'reload_brand_timeout')
+                page.reload(wait_until='domcontentloaded',timeout=30000)
+                continue
+            break
+        if wait_product_status(page,control,timeout=7):
+            progress(job,'select_product_status')
+            select_product_status(page,job['payload'].get('status','Mới'))
+            return
+        if attempt<4:
             progress(job,'reload_blank_product_status')
-            page.wait_for_timeout(2000)
             page.reload(wait_until='domcontentloaded',timeout=30000)
-    raise RuntimeError('Ô trạng thái sản phẩm vẫn chưa sẵn sàng sau 3 lượt chờ (tối đa 20 giây mỗi bước kiểm tra); chưa nhập file, chưa tạo CO. Vui lòng thử lại khi MWG tải đầy đủ.')
+    if brand_timeout:
+        raise RuntimeError('Danh sách thương hiệu MWG chưa tải đầy đủ sau 5 lượt kiểm tra; chưa nhập file, chưa tạo CO. Vui lòng thử lại khi MWG tải đầy đủ.')
+    raise RuntimeError('Ô trạng thái sản phẩm vẫn chưa sẵn sàng sau 5 lượt tải (chờ trạng thái tối đa 7 giây mỗi lượt); chưa nhập file, chưa tạo CO. Vui lòng thử lại khi MWG tải đầy đủ.')
 
-def process(page, job, prepared_id=None):
+def process(page, job, prepared_id=None, guard=None):
     submitting=False
+    creation=None
     alerts=[]
     records=items(job['payload'])
+    original_records=records
     outcomes=[{'co':'','error':''} for _ in records]
+    excluded=[]
     def on_dialog(dialog):
         alerts.append(dialog.message)
         if dialog.type=='alert':
@@ -228,10 +559,8 @@ def process(page, job, prepared_id=None):
             if page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
                 raise RuntimeError('Trang MWG đã thay đổi khi chờ xác nhận; chưa tạo CO.')
         else:
-            progress(job,'reload_before_request')
-            if page.url.split('?',1)[0].split('#',1)[0].rstrip('/')==URL:
-                page.reload(wait_until='domcontentloaded',timeout=30000)
-            else:
+            progress(job,'reuse_page_before_request')
+            if page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
                 page.goto(URL,wait_until='domcontentloaded',timeout=30000)
             page.get_by_role('button',name='Tạo CO',exact=True).wait_for(timeout=30000)
             prepare_import_controls(page,job)
@@ -241,37 +570,32 @@ def process(page, job, prepared_id=None):
             folder=ROOT/job['id']; folder.mkdir(exist_ok=True)
             output=folder/'StoreChangeOrderTGDD_upload.xlsx'
             fill_template(TEMPLATE,output,job['payload'])
-            progress(job,'upload_excel')
-            alerts.clear()
-            upload_excel(page,output)
-            popup=page.get_by_text('Dữ liệu trong tập tin excel',exact=True)
-            import_deadline=time.monotonic()+60
-            while not popup.is_visible():
-                if alerts:
-                    raise RuntimeError('MWG báo lỗi khi nhập Excel: '+'; '.join(alerts)[-1800:])
-                if time.monotonic()>=import_deadline:
-                    raise RuntimeError('MWG chưa trả kết quả nhập Excel sau 60 giây; bot chưa bấm Tạo CO.')
-                page.wait_for_timeout(250)
-            errors=[]
-            for row in table_with(page,'Xóa').get_by_role('row').all()[1:]:
-                cells=row.get_by_role('cell').all_text_contents()
-                if len(cells)>=9 and cells[8].strip():
-                    errors.append(cells[8].strip())
-            progress(job,'accept_import')
-            if errors:
+            original_indices=list(range(len(records)))
+            while True:
+                responses=[]
+                popup=import_with_retry(page,job,output,alerts,responses=responses)
+                errors=received_import_errors(responses,records)
+                progress(job,'import_response_verified')
+                progress(job,'accept_import')
+                if not any(errors):break
                 cancel_import(page)
-                report(job,'failed','; '.join(dict.fromkeys(errors))[:2500]); return
+                keep=[];indices=[]
+                for index,data,error in zip(original_indices,records,errors):
+                    if error:excluded.append({'index':index,'error':error[:500]})
+                    else:keep.append(data);indices.append(index)
+                if not keep:
+                    failures={row['index']:row['error'] for row in excluded}
+                    report(job,'failed',json.dumps([{'co':'','error':failures[n],'state':'failed'}
+                        for n in range(len(original_records))],ensure_ascii=False),before_submit=True)
+                    return
+                # This only repeats the import, before confirmation or any CO click.
+                records=keep;original_indices=indices
+                progress(job,'skip_invalid_import_rows')
+                fill_template(TEMPLATE,output,dict(job['payload'],items=records))
             page.get_by_text('Đồng ý',exact=True).click()
             popup.wait_for(state='hidden',timeout=15000)
         table=table_with(page,'Mã yêu cầu chuyển kho')
-        deadline=time.monotonic()+10
-        rows=data_rows(table)
-        while not rows and time.monotonic()<deadline:
-            page.wait_for_timeout(250)
-            rows=data_rows(table)
-        matched=match_rows(rows,records)
-        if matched is None:
-            raise RuntimeError('Dữ liệu trên trang không khớp đủ '+str(len(records))+' dòng yêu cầu; chưa tạo CO.')
+        matched=wait_matched_rows(page,table,records)
         for cells in matched:
             if cells[9].strip() or cells[10].strip():
                 raise RuntimeError('Trang đã có mã CO hoặc lỗi; dừng để kiểm tra.')
@@ -279,8 +603,12 @@ def process(page, job, prepared_id=None):
         if not all(names):
             raise RuntimeError('MWG chưa trả đủ tên sản phẩm; chưa tạo CO.')
         if job.get('mode')=='preview':
-            report(job,'preview_ready',json.dumps({'rows':[{'product_name':cells[4].strip(),'source_name':cells[1].strip(),'destination_name':cells[2].strip()} for cells in matched]},ensure_ascii=False))
+            preview={'rows':[{'product_name':cells[4].strip(),'source_name':cells[1].strip(),'destination_name':cells[2].strip()} for cells in matched]}
+            if excluded:preview['excluded']=excluded
+            report(job,'preview_ready',json.dumps(preview,ensure_ascii=False))
             return job['id']
+        if excluded:
+            raise RuntimeError('Dòng nhập đã thay đổi; cần gửi bản xác nhận mới trước khi tạo CO.')
         for data,name in zip(records,names):
             if data.get('product_name') and name!=data['product_name']:
                 raise RuntimeError('Tên sản phẩm trên MWG khác bản đã xác nhận; chưa tạo CO.')
@@ -294,39 +622,61 @@ def process(page, job, prepared_id=None):
             selected=set() if not owns else {x.strip() for x in page.locator('[id="'+owns[-1]+'"] .k-state-selected').all_text_contents()}
             if selected!={'1 - thegioididong','2 - dienmayxanh','16 - TopZone'}:
                 raise RuntimeError('Thương hiệu đã thay đổi khi chờ xác nhận; chưa tạo CO.')
+        if guard is not None:guard.uncertain_job=job['id']
         report(job,'submitting')
         submitting=True
         progress(job,'submit_co')
         alerts.clear()
+        creation=CreateCapture(page,records)
         page.get_by_role('button',name='Tạo CO',exact=True).click()
-        deadline=time.monotonic()+60
+        deadline=time.monotonic()+15
         while time.monotonic()<deadline:
+            if creation.rows is not None and len(creation.requests)==1:
+                outcomes=merge_results(outcomes,creation.rows)
+                if all(row.get('state') in {'succeeded','failed'} for row in outcomes):
+                    progress(job,'create_response_verified')
+                    state=result_state(outcomes)
+                    report(job,state,json.dumps(outcomes,ensure_ascii=False))
+                    if guard is not None:guard.uncertain_job=None
+                    return
             current=match_rows(data_rows(table),records)
             if current is not None:
+                displayed=[dict(row) for row in outcomes]
                 for index,cells in enumerate(current):
                     co=cells[9].strip(); error=cells[10].strip()
                     if co or error:
-                        outcomes[index]={'co':co,'error':error[:350]}
-                if all(row['co'] or row['error'] for row in outcomes):
-                    state='unknown' if any(row['co'] and row['error'] for row in outcomes) else 'succeeded' if any(row['co'] for row in outcomes) else 'failed'
-                    report(job,state,json.dumps(outcomes,ensure_ascii=False)); return
-            if len(records)==1:
-                rejection=concurrent_rejection(alerts,records[0])
-                if rejection:
-                    report(job,'failed',rejection); return
+                        if co and not re.fullmatch(r'[0-9A-Z]+CO[0-9]+',co):
+                            continue
+                        previous_co=outcomes[index]['co']
+                        if previous_co and co!=previous_co:
+                            co=previous_co
+                            error='Kết quả MWG thay đổi sau khi đã nhận mã CO; cần đối soát. '+error
+                        displayed[index]={'co':co,'error':error[:350],
+                            'state':'unknown' if co and error else 'succeeded' if co else 'failed'}
+                for index,data in enumerate(records):
+                    rejection=concurrent_rejection(alerts,data)
+                    if rejection and not outcomes[index]['co'] and not outcomes[index]['error']:
+                        displayed[index]={'co':'','error':rejection[:500],'state':'failed'}
+                outcomes=merge_results(outcomes,displayed)
+                if all(row.get('state') in {'succeeded','failed'} for row in outcomes) and len(creation.requests)<=1:
+                    state=result_state(outcomes)
+                    report(job,state,json.dumps(outcomes,ensure_ascii=False))
+                    if guard is not None and state!='unknown':guard.uncertain_job=None
+                    return
             page.wait_for_timeout(300)
-        raise RuntimeError('Chưa thấy mã CO hoặc lỗi sau khi tạo; cần kiểm tra thủ công.')
+        raise RuntimeError(creation.problem or 'MWG chưa trả mã CO hoặc lỗi sau 15 giây; tiếp tục theo dõi phản hồi, không tạo lại.')
     except Exception as error:
         progress(job,'exception_'+type(error).__name__)
+        capture_failure(page,job['id'])
         if (ROOT/'pending.json').exists():
             raise # Preserve undelivered outcome, including successful CO codes.
         message=str(error).splitlines()[0][:1800]
-        if alerts:
+        if alerts and not (submitting and any(concurrent_rejection(alerts,data) for data in records)):
             message+=' | '+'; '.join(alerts)[-500:]
         if 'phiên làm việc đã hết hạn' in message.lower():
             message=('Phiên đăng nhập MWG trên Mac đã hết hạn. '
-                     'Dừng bot bằng Ctrl+C, mở lại Chay-bot-Mac.command và đăng nhập MWG '
-                     'trong cửa sổ Chrome của bot, rồi nhấn Enter tại Terminal. '
+                     'Đăng nhập lại MWG trong cửa sổ Chrome của bot. '
+                     'Bot tự nhận lại khi trang sẵn sàng. '
                      'Sau đó gửi lại form và xác nhận. Không cần đổi thông tin kho hoặc sản phẩm.')
         elif 'has been closed' in message:
             message=('Chrome của bot đã đóng hoặc mất kết nối. Giữ cửa sổ Chrome của bot mở. '
@@ -343,33 +693,52 @@ def process(page, job, prepared_id=None):
             for outcome in outcomes:
                 if not outcome['co'] and not outcome['error']:
                     outcome['error']='Chưa rõ kết quả; cần đối soát MWG. '+message[:250]
+                    outcome['state']='unknown'
             report(job,'unknown',json.dumps(outcomes,ensure_ascii=False))
+            if guard is not None and creation is not None and creation.requests:
+                guard.late_submissions.append((job,creation,outcomes))
+                creation=None  # Keep observing this exact request after the 15s notice.
         else:
-            report(job,'failed',message)
+            if excluded:
+                failures={row['index']:row['error'] for row in excluded}
+                message=json.dumps([{'co':'','error':failures.get(index,message),'state':'failed'}
+                                    for index in range(len(original_records))],ensure_ascii=False)
+            report(job,'failed',message,before_submit=True)
     finally:
-        page.remove_listener('dialog',on_dialog)
+        if creation is not None:creation.close()
+        try:
+            page.remove_listener('dialog',on_dialog)
+        except Exception:
+            pass
 
-def open_browser(pw):
+def open_browser(pw, background=False):
     # The bundled CfT archive lacks valid macOS signing resources on this Mac.
     # Use the installed signed Chrome and preserve the original bot login profile.
     if not Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').is_file():
         raise RuntimeError('Không tìm thấy Google Chrome trong Applications. Chưa nhận yêu cầu CO.')
     context=pw.chromium.launch_persistent_context(
-        str(ROOT/'browser'),channel='chrome',headless=False,accept_downloads=True)
+        str(ROOT/'browser'),channel='chrome',headless=background,accept_downloads=True,
+        args=['--disable-backgrounding-occluded-windows','--disable-renderer-backgrounding'])
+    # MWG may request focus after navigation; leave foreground choice to the user.
+    context.add_init_script("window.focus = () => {};")
     return context, context.pages[0] if context.pages else context.new_page()
 
-def refresh_idle(page):
+def refresh_idle(page, guard=None):
     # Preserve the current result page when reconciliation is still required.
     if (ROOT/'pending.json').exists():
         return False
+    if guard is not None and guard.uncertain_job is not None:
+        return False
     states=api('status',None)['states']
-    if any(states.get(state,0) for state in ('running','submitting','unknown','preview_running')):
+    if any(states.get(state,0) for state in ('draft','queued','verified_queued','preview_queued','running','submitting','preview_running')):
+        return False
+    if (guard is None or not guard.track_submissions) and states.get('unknown',0):
         return False
     page.reload(wait_until='domcontentloaded',timeout=30000)
     print('Đã tải lại trang MWG sau 5 phút khi rảnh.',flush=True)
     return True
 
-def ensure_browser(pw, context, page):
+def ensure_browser(pw, context, page, background=False):
     if not page.is_closed():
         return context, page
     # A closed tab can leave the context alive. A closed window cannot.
@@ -378,28 +747,68 @@ def ensure_browser(pw, context, page):
     except Exception as error:
         if 'has been closed' not in str(error):
             raise
-        return open_browser(pw)
+        return open_browser(pw, background=background)
 
 def start_heartbeat():
     stop=threading.Event()
-    api('heartbeat',{'online':True})
     def pulse():
-        while not stop.wait(10):
-            try:
-                api('heartbeat',{'online':True})
-            except Exception:
-                print('Mất kết nối heartbeat; server sẽ tự ngừng nhận CO khi quá 30 giây.',flush=True)
-    threading.Thread(target=pulse,daemon=True).start()
+        previous=None
+        sent=0
+        while not stop.is_set():
+            RUNTIME.persist()
+            health=RUNTIME.snapshot()
+            if health['state']!=previous or time.monotonic()-sent>=5:
+                try:
+                    payload={'online':True,'health':health}
+                    if TELEMETRY is not None:
+                        try:payload['telemetry']=TELEMETRY.batch()
+                        except Exception:pass
+                    answer=api('heartbeat',payload,timeout=5)
+                    if TELEMETRY is not None and isinstance(answer,dict):
+                        try:TELEMETRY.acknowledge(answer.get('telemetry_ack'))
+                        except Exception:pass
+                    previous=health['state'];sent=time.monotonic()
+                except Exception:
+                    print('Mất kết nối heartbeat; máy chủ tự ngừng nhận CO khi quá 30 giây.',flush=True)
+            stop.wait(1)
+    thread=threading.Thread(target=pulse,daemon=True)
+    thread.start()
     def shutdown():
         stop.set()
-        try:
-            api('heartbeat',{'online':False})
-        except Exception:
-            pass
-    atexit.register(shutdown)
-    return stop
+        thread.join(timeout=6)
+        try:api('heartbeat',{'online':False,'health':{'state':'stopped','progress_age_seconds':0}},timeout=5)
+        except Exception:pass
+    return shutdown
+
+
+def recover_idle_controls(page, guard, prepared_id=None):
+    # A readiness repair is never allowed to erase a preview or an uncertain result.
+    if prepared_id or guard.uncertain_job is not None or (ROOT/'pending.json').exists():return False
+    states=api('status',None)['states']
+    if any(states.get(k,0) for k in ('draft','preview_running','running','submitting')):
+        return False
+    if not guard.track_submissions and states.get('unknown',0):return False
+    for attempt in range(5):
+        check_stop()
+        if page.is_closed() or page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
+            return False
+        if not guard.ready():
+            try:
+                # Brand selection is the prerequisite for loading the status list.
+                # Only this idle repair path may do it without a claimed request.
+                select_brands(page)
+            except Exception as error:
+                print('Chưa chuẩn bị được thương hiệu MWG ('+type(error).__name__+').',flush=True)
+        if guard.wait_ready(timeout=7):return True
+        if attempt<4:
+            print('MWG chưa sẵn sàng; tải lại lượt '+str(attempt+2)+'/5.',flush=True)
+            page.reload(wait_until='domcontentloaded',timeout=15000)
+    print('MWG chưa sẵn sàng sau 5 lượt. Tạm ngừng nhận CO; giữ Chrome để kiểm tra.',flush=True)
+    capture_failure(page,'readiness-error')
+    return False
 
 def main():
+    global RUNTIME, TELEMETRY
     env_file=Path(__file__).resolve().parent/'.env'
     if env_file.exists():
         for line in env_file.read_text().splitlines():
@@ -409,47 +818,152 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--login',action='store_true')
     parser.add_argument('--live',action='store_true')
+    parser.add_argument('--background',action='store_true',help='Chạy Chrome không hiện cửa sổ sau khi đăng nhập')
+    parser.add_argument('--api',action='store_true',help='Dùng API MWG sau xác nhận')
+    parser.add_argument('--probe-import',action='store_true',help='Thử API nhập file, không tạo CO')
     args=parser.parse_args()
-    if not (args.login or args.live):
+    if args.probe_import and args.live:
+        parser.error('Không chạy thử API đồng thời với nhận lệnh thật.')
+    if not (args.login or args.live or args.probe_import):
         parser.error('Dùng --login để đăng nhập; --live để xử lý tác vụ đã xác nhận.')
     os.umask(0o077); ROOT.mkdir(exist_ok=True)
-    lock=open(ROOT/'worker.lock','w'); fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    lock=open(ROOT/'worker.lock','a')
+    try:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('BOT ĐANG MỞ ở phiên khác. Không mở thêm. Dùng Kiem-tra-BOT.command để xem trạng thái.',flush=True)
+        raise SystemExit(3)
     os.environ['PLAYWRIGHT_BROWSERS_PATH']=str(Path(__file__).resolve().parent/'.pw-browsers')
     from playwright.sync_api import sync_playwright
-    with sync_playwright() as pw:
-        context,page=open_browser(pw)
-        if args.login:
-            page.goto(URL)
-            input('Nếu MWG chưa đăng nhập, hãy đăng nhập trong cửa sổ này. Xong nhấn Enter để tiếp tục: ')
-        if args.live:
-            print('Bắt đầu chờ yêu cầu từ LINE trong cùng cửa sổ Chrome. Giữ Chrome và Terminal mở.', flush=True)
-            pending=ROOT/'pending.json'
-            if pending.exists():
-                record=json.loads(pending.read_text()); api('result',record); pending.unlink()
-                if record['state']=='submitting':
-                    raise RuntimeError('Có tác vụ dở ở bước tạo. Kiểm tra MWG trước khi chạy lại.')
-            start_heartbeat()
-            refresh_at=time.monotonic()+300
-            prepared_id=None
-            while True:
-                context,page=ensure_browser(pw,context,page)
-                job=api('claim',{'preview_protocol':1,'prepared_id':prepared_id,'batch_protocol':1})
-                if job and job.get('release_preview'):
+    from worker_observability import Telemetry
+    try:TELEMETRY=Telemetry(ROOT) if args.live else None
+    except Exception:TELEMETRY=None
+    RUNTIME=Runtime(ROOT);RUNTIME.install()
+    shutdown=start_heartbeat() if args.live else lambda:None
+    try:
+        with sync_playwright() as pw:
+            context,page=open_browser(pw, background=args.background and not args.login)
+            try:
+                if args.login:
+                    page.goto(URL)
+                    RUNTIME.wait_login()
+                    if args.background:
+                        # Close cleanly to flush the persistent login before reopening it.
+                        # This happens before claiming any request or importing a file.
+                        context.close()
+                        context,page=open_browser(pw, background=True)
+                if args.probe_import:
+                    from mwg_import_api import probe_import
+                    if page.url.split('?',1)[0].rstrip('/') != URL:
+                        page.goto(URL,wait_until='domcontentloaded',timeout=30000)
+                    page.get_by_role('button',name='Tạo CO',exact=True).wait_for(timeout=30000)
+                    print('Đã mở MWG. Đang tìm mã xác thực...',flush=True)
+                    token_control=page.locator('input[name="__RequestVerificationToken"]')
+                    if token_control.count()!=1:
+                        raise ValueError('Không tìm thấy duy nhất một mã xác thực trên trang MWG.')
+                    token=token_control.first.input_value(timeout=5000)
+                    sample={'source':'852','destination':'10606','product':'0131491005414',
+                            'quantity':2,'note':'KIEM TRA API NHAP FILE - KHONG TAO CO','status':'Mới'}
+                    output=ROOT/'api-probe.xlsx'
+                    fill_template(TEMPLATE,output,sample)
+                    started=time.monotonic()
+                    print('Đang gửi API nhập Excel (tối đa 60 giây). Không tạo CO.',flush=True)
+                    rows=probe_import(context.request,token,output,[sample],status_id='1')
+                    elapsed=round(time.monotonic()-started,3)
+                    result={'ok':True,'operation':'import_only','created_co':False,
+                            'seconds':elapsed,'rows':[{'source':r['FROMSTOREID'],
+                            'destination':r['TOSTOREID'],'product':r['PRODUCTID'],
+                            'name':r['PRODUCTNAME'],'quantity':r['QUANTITY']} for r in rows]}
+                    (ROOT/'api-probe-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+                    print('API NHẬP FILE THÀNH CÔNG: '+str(elapsed)+' giây. Đã đối chiếu đúng dữ liệu. KHÔNG tạo CO.',flush=True)
+                if args.live:
+                    print('Bot đang chạy. Dùng Kiem-tra-BOT.command để xem trạng thái; Tat-BOT.command để dừng.', flush=True)
+                    pending=ROOT/'pending.json'
+                    if pending.exists():
+                        record=json.loads(pending.read_text()); deliver_result(record); pending.unlink()
+                        if record['state']=='submitting':
+                            raise RuntimeError('Có tác vụ dở ở bước tạo. Kiểm tra MWG trước khi chạy lại.')
+                    refresh_at=time.monotonic()+300
                     prepared_id=None
-                    refresh_at=time.monotonic()+300
-                    continue
-                if job:
-                    prepared_id=process(page,job,prepared_id)
-                    refresh_at=time.monotonic()+300
-                elif not prepared_id and time.monotonic()>=refresh_at:
-                    try:
-                        refresh_idle(page)
-                    except Exception as error:
-                        print('Không tải lại được trang MWG: '+type(error).__name__,flush=True)
-                    refresh_at=time.monotonic()+300
-                if not job:
-                    time.sleep(0.5 if prepared_id else 1)
-        context.close()
+                    from mwg_api_worker import ApiWorker
+                    api_worker=ApiWorker() if args.api else None
+                    guard=RecoveryGuard(page,track_submissions=not args.api)
+                    recovery_ready=False
+                    repair_at=0
+                    while True:
+                        check_stop()
+                        reconcile_late_submissions(guard)
+                        context,page=ensure_browser(pw,context,page,background=args.background)
+                        if page.url in ('about:blank','chrome://newtab/'):
+                            try:
+                                health_state('loading')
+                                page.goto(URL,wait_until='domcontentloaded',timeout=15000)
+                            except Exception:
+                                print('MWG chưa mở được. Giữ Chrome và thử lại; chưa lấy yêu cầu.',flush=True)
+                                time.sleep(5)
+                                continue
+                        if guard.page is not page:
+                            guard=RecoveryGuard(page,track_submissions=not args.api)
+                            recovery_ready=False
+                        ready=guard.ready()
+                        if ready:
+                            health_state('awaiting_confirmation' if prepared_id else 'ready')
+                            repair_at=0
+                        else:
+                            on_mwg=page.url.split('?',1)[0].split('#',1)[0].rstrip('/')==URL
+                            health_state('loading' if on_mwg else 'login')
+                            if on_mwg and not prepared_id and time.monotonic()>=repair_at:
+                                try:
+                                    ready=recover_idle_controls(page,guard,prepared_id)
+                                except Exception:
+                                    ready=False
+                                repair_at=time.monotonic()+300
+                            if ready:health_state('ready')
+                            elif on_mwg:health_state('blocked')
+                        job=claim_with_reconnect({'preview_protocol':1,'prepared_id':prepared_id,'batch_protocol':1,
+                                                 'recovery_protocol':int(not args.api),
+                                                 'page_ready':recovery_ready and guard.ready()})
+                        if job and job.get('recovery_required'):
+                            recovery_ready=guard.wait_ready()
+                            if not recovery_ready:
+                                print('MWG còn bận hoặc chưa sẵn sàng. Giữ trang để đối soát; chưa lấy yêu cầu khác.',flush=True)
+                                time.sleep(5)
+                            continue
+                        if job and job.get('release_preview'):
+                            prepared_id=None
+                            if api_worker: api_worker.prepared=None
+                            refresh_at=time.monotonic()+300
+                            continue
+                        if job:
+                            health_state('processing')
+                            recovery_ready=False
+                            if api_worker:
+                                import sys
+                                prepared_id=api_worker.process(page,job,prepared_id,sys.modules[__name__])
+                            else:
+                                prepared_id=process(page,job,prepared_id,guard=guard)
+                            refresh_at=time.monotonic()+300
+                        elif not prepared_id and time.monotonic()>=refresh_at:
+                            try:
+                                health_state('loading')
+                                refresh_idle(page,guard=guard)
+                            except Exception as error:
+                                print('Không tải lại được trang MWG: '+type(error).__name__,flush=True)
+                            refresh_at=time.monotonic()+300
+                        if not job:
+                            # Pump Playwright events so completion of XHR can clear the guard.
+                            try:page.wait_for_timeout(500 if prepared_id else 1000)
+                            except Exception:pass
+            finally:
+                # Flush the persistent profile even on a cooperative stop or an error.
+                try:context.close()
+                except Exception:pass
+    finally:
+        shutdown()
+        RUNTIME.close()
+        print('BOT ĐÃ TẮT. Chrome của bot và kết nối nhận CO đã dừng.',flush=True)
+        RUNTIME=None;TELEMETRY=None
+        lock.close()
 
 if __name__=='__main__':
     main()
