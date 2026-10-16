@@ -27,6 +27,7 @@ class PortalTests(unittest.TestCase):
             'CO_WORKER_TOKEN':'test-worker-token','CO_ALLOWED_USER_IDS':ADMIN,
             'CHANNEL_SECRET':'test-secret-never-production'*2,'CHANNEL_ACCESS_TOKEN':'test-token',
             'TAO_LIFF_ID':'123456-test','TAO_LINE_LOGIN_CHANNEL_ID':'123456',
+            'TAO_PUBLIC_LAUNCH':'1',
             'REPORT_PUBLIC_BASE_URL':BASE,'CO_GATHER_SECONDS':'0'})
         env.start();self.addCleanup(env.stop)
         for name, value in [('load_conditions',{}),('stores',{}),('verify_chat_member',None)]:
@@ -188,6 +189,11 @@ class PortalTests(unittest.TestCase):
         event=types.SimpleNamespace(reply_token='test',message=types.SimpleNamespace(text='!công cụ'))
         self.assertTrue(self.handle(event));self.assertIn('https://liff.line.me/123456-test',self.replies[-1])
         event.message.text='!other';self.assertFalse(self.handle(event))
+
+    def test_unpublished_app_does_not_distribute_link(self):
+        event=types.SimpleNamespace(reply_token='test',message=types.SimpleNamespace(text='!congcu'))
+        with patch.dict(os.environ,{'TAO_PUBLIC_LAUNCH':'0'}):self.assertTrue(self.handle(event))
+        self.assertNotIn('https://',self.replies[-1])
 
 
 class LineVerificationTests(unittest.TestCase):

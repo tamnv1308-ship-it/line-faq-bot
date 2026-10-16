@@ -51,7 +51,8 @@ def settings():
     base = os.getenv('REPORT_PUBLIC_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL') or values.get('base_url', '')
     ready = bool(re.fullmatch(r'[0-9]+-[a-zA-Z0-9]+', liff_id) and
                  re.fullmatch(r'[0-9]+', channel) and liff_id.split('-')[0] == channel)
-    return {'liff_id':liff_id, 'channel_id':channel, 'base_url':base.rstrip('/'), 'ready':ready}
+    public_launch = os.getenv('TAO_PUBLIC_LAUNCH', str(values.get('public_launch', False))).lower() in ('1','true')
+    return {'liff_id':liff_id, 'channel_id':channel, 'base_url':base.rstrip('/'), 'ready':ready, 'public_launch':public_launch}
 
 
 def verify_id_token(token, channel):
@@ -379,8 +380,8 @@ def install(app, reply, default_users=()):
     def handle(event):
         if event.message.text.strip().casefold() not in ('!congcu','!côngcụ','!tao','!công cụ'):return False
         cfg=settings()
-        if not cfg['ready']:
-            reply(event.reply_token,'Công cụ Táo đang được kết nối. Em sẽ nhận được đường dẫn sau khi hoàn tất.');return True
+        if not cfg['ready'] or not cfg['public_launch']:
+            reply(event.reply_token,'Công cụ Táo đang được hoàn tất kết nối. Các lệnh của bot vẫn dùng như hiện tại.');return True
         reply(event.reply_token,'🍏 CÔNG CỤ TÁO\nTra cứu CO · Yêu cầu · Điều kiện sản phẩm\n\nhttps://liff.line.me/'+cfg['liff_id']+'\n\nĐăng nhập bằng tài khoản LINE của bạn. Quyền và quy tắc tạo CO giữ nguyên.')
         return True
     return handle
