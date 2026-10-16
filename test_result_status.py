@@ -39,6 +39,7 @@ class ReconciliationEndpointTests(unittest.TestCase):
         status=self.client.get('/co/worker/status',headers=self.headers).json
         self.assertFalse(status['enabled']);self.assertTrue(status['online'])
         self.assertEqual(status['result_recovery_version'],1)
+        self.assertEqual(status['late_result_version'],1)
         self.q.heartbeat(False)
         self.assertFalse(self.client.get('/co/worker/status',headers=self.headers).json['online'])
 

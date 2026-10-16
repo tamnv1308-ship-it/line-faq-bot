@@ -36,6 +36,7 @@ CANCEL_QUIPS = (
 )
 HONORS_VERSION = 2
 RESULT_RECOVERY_VERSION = 1
+LATE_RESULT_VERSION = 1
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -570,15 +571,44 @@ class Queue:
                 except (ValueError,TypeError):
                     return False
             allowed = {'preview_running':{'failed'},'running': {'submitting','failed','unknown'}, 'submitting': {'succeeded','failed','unknown'}}
-            if state not in allowed.get(job['state'], set()):
+            late=job['state']=='unknown' and state in {'succeeded','failed'} and result.startswith('[')
+            if late:
+                try:
+                    payload=json.loads(job['payload'])
+                    old_rows=decode_results(payload,job['result'])
+                    if any(row.get('state') not in {'succeeded','failed'} for row in rows):return False
+                    for old,new in zip(old_rows,rows):
+                        if old['co'] and old['co']!=new['co']:return False
+                        if old['co'] and not old['error'] and new['error']:return False
+                        if old.get('state') in {'succeeded','failed'} and old!=new:return False
+                    if state!=('succeeded' if any(row['co'] for row in rows) else 'failed'):return False
+                except (ValueError,TypeError,KeyError):return False
+                payload['late_reconciliation']={'previous_result':job['result'],'received_at':time.time()}
+                db.execute('UPDATE jobs SET payload=? WHERE id=?',(json.dumps(payload,ensure_ascii=False),jid))
+            elif state not in allowed.get(job['state'], set()):
                 return False
             db.execute('UPDATE jobs SET state=?,result=?,updated=?,notified=0 WHERE id=?',(state,result,time.time(),jid))
             if state in {'succeeded','unknown'}:
                 completed=dict(job); completed.update(state=state,result=result)
                 message=note_group_text(completed)
                 if message:
+                    previous=db.execute('SELECT * FROM co_note_outbox WHERE job_id=?',(jid,)).fetchone() if late else None
                     db.execute('INSERT INTO co_note_outbox(job_id,destination,message) VALUES(?,?,?) ON CONFLICT(job_id) DO NOTHING',
                                (jid,NOTE_GROUP,message))
+                    if previous:
+                        # Preserve already-read NOTE entries; append only newly known results.
+                        header,*blocks=previous['message'].split('\n\n')
+                        for index,block in enumerate(blocks):
+                            db.execute('INSERT INTO co_note_rows(job_id,row_index,message,delivered) VALUES(?,?,?,?) ON CONFLICT(job_id,row_index) DO NOTHING',
+                                       (jid,index,header+'\n'+block,previous['delivered']))
+                        existing=db.execute('SELECT row_index,message FROM co_note_rows WHERE job_id=?',(jid,)).fetchall()
+                        known={row['message'] for row in existing};index=max((row['row_index'] for row in existing),default=-1)+1
+                        header,*blocks=message.split('\n\n')
+                        for block in blocks:
+                            text=header+'\n'+block
+                            if text not in known:
+                                db.execute('INSERT INTO co_note_rows(job_id,row_index,message) VALUES(?,?,?)',(jid,index,text))
+                                known.add(text);index+=1
             return True
 
     def result_status(self, jid, lease):
@@ -733,7 +763,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        copied_text_version=COPIED_TEXT_VERSION, confirm_lock_version=CONFIRM_LOCK_VERSION,
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
-                       row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1)
+                       row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
+                       late_result_version=LATE_RESULT_VERSION)
 
     @app.post('/co/worker/conditions/reload')
     def conditions_reload():
