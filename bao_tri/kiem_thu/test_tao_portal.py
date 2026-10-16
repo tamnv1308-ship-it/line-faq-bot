@@ -63,7 +63,7 @@ class PortalTests(unittest.TestCase):
         for path in ('/tao/','/tao/privacy','/tao/assets/app.js','/tao/assets/app.css'):
             with self.client.get(path) as response:self.assertEqual(response.status_code,200)
         self.assertEqual(self.call('config').status_code,200)
-        for path in ('me','jobs','summary','conditions?code=0131491005415','lookup?code=1CO123','admin/locks'):
+        for path in ('me','jobs','summary','conditions?code=0131491005415','lookup?code=1CO123','admin/locks','admin/queue'):
             self.assertEqual(self.call(path).status_code,401,path)
         self.assertEqual(self.client.get('/tao/assets/tao_portal.py').status_code,404)
 
@@ -148,6 +148,87 @@ class PortalTests(unittest.TestCase):
             self.assertEqual(result.status_code,200,result.json);self.assertEqual(self.state(jid),state)
         jid=self.job(state='queued');self.call('jobs/'+jid+'/cancel','POST',{})
         self.assertEqual(self.state(jid),'cancelled')
+
+    def test_bulk_cancel_only_owner_even_for_other_admins(self):
+        jid=self.job(state='queued')
+        self.assertEqual(self.call('admin/cancel-waiting','POST',{}).status_code,401)
+        for user in (MEMBER,ADMIN):
+            self.login(user)
+            self.assertEqual(self.call('admin/queue').status_code,403)
+            self.assertEqual(self.call('admin/cancel-waiting','POST',{'revision':'0'*64}).status_code,403)
+        self.assertEqual(self.state(jid),'queued')
+
+    def test_bulk_cancel_requires_origin_csrf_and_revision(self):
+        jid=self.job(state='queued');self.login(OWNER)
+        revision=self.call('admin/queue').json['revision']
+        for headers in ({'Origin':'https://evil.example'},{'X-Tao-CSRF':'bad'}):
+            self.assertEqual(self.call('admin/cancel-waiting','POST',{'revision':revision},headers).status_code,403)
+        for value in (None,1,{},'bad'):
+            self.assertEqual(self.call('admin/cancel-waiting','POST',{'revision':value}).status_code,400)
+        self.assertEqual(self.state(jid),'queued')
+
+    def test_bulk_cancel_all_chats_preserves_processing_history_and_intake(self):
+        waiting=[self.job(owner=user,chat=chat,state=state) for state,user,chat in (
+            ('draft',MEMBER,GROUP),('preview_queued',OTHER,'C'+'4'*32),
+            ('queued',OWNER,OWNER),('verified_queued',ADMIN,GROUP))]
+        protected={self.job(state=state):state for state in
+                   ('preview_running','running','submitting','unknown','succeeded','failed','expired','cancelled')}
+        before={}
+        with self.q.db() as db:
+            for jid in waiting+list(protected):
+                db.execute('UPDATE jobs SET lease=?,result=? WHERE id=?',('original-lease','original-evidence',jid))
+                db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,'reply-'+jid,time.time()))
+                before[jid]=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+        self.q.admin('BOT OFF');self.q.heartbeat(False);self.login(OWNER)
+        overview=self.call('admin/queue').json
+        self.assertEqual((overview['waiting'],overview['processing'],overview['unknown']),(4,3,1))
+        response=self.call('admin/cancel-waiting','POST',{'revision':overview['revision']})
+        self.assertEqual(response.status_code,200,response.json);self.assertEqual(response.json['cancelled'],4)
+        with self.q.db() as db:
+            self.assertEqual(db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled'],0)
+            for jid in waiting:
+                row=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+                self.assertEqual(row['state'],'cancelled');self.assertIsNone(row['lease']);self.assertEqual(row['notified'],1)
+                for field in ('payload','result','owner','chat','created'):self.assertEqual(row[field],before[jid][field])
+                self.assertIsNone(db.execute('SELECT job_id FROM preview_replies WHERE job_id=?',(jid,)).fetchone())
+            for jid in protected:
+                self.assertEqual(dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()),before[jid])
+        self.assertEqual(self.call('admin/queue').json['waiting'],0)
+
+    def test_bulk_cancel_does_not_cancel_new_arrivals_without_new_review(self):
+        first=self.job(state='queued');self.login(OWNER)
+        revision=self.call('admin/queue').json['revision']
+        second=self.job(owner=OTHER,state='queued')
+        response=self.call('admin/cancel-waiting','POST',{'revision':revision})
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(self.state(first),'queued');self.assertEqual(self.state(second),'queued')
+
+    def test_bulk_cancel_refuses_after_worker_claim(self):
+        jid=self.job(state='preview_queued');self.login(OWNER)
+        revision=self.call('admin/queue').json['revision']
+        claimed=self.q.claim(preview_protocol=True,batch_protocol=True)
+        self.assertEqual(claimed['id'],jid)
+        response=self.call('admin/cancel-waiting','POST',{'revision':revision})
+        self.assertEqual(response.status_code,409);self.assertEqual(self.state(jid),'preview_running')
+
+    def test_bulk_cancel_release_prepared_page_and_reject_stale_report(self):
+        jid=self.job(state='draft');self.login(OWNER)
+        with self.q.db() as db:db.execute('UPDATE jobs SET lease=? WHERE id=?',('lease-before-cancel',jid))
+        data={'revision':self.call('admin/queue').json['revision']}
+        self.assertEqual(self.call('admin/cancel-waiting','POST',data).json['cancelled'],1)
+        self.assertEqual(self.call('admin/cancel-waiting','POST',data).status_code,409)
+        self.assertEqual(self.q.claim(preview_protocol=True,prepared_id=jid),{'release_preview':True})
+        self.assertFalse(self.q.update(jid,'lease-before-cancel','preview_ready','Late response'))
+        self.assertEqual(self.state(jid),'cancelled')
+
+    def test_waiting_and_attention_filters_keep_user_scope(self):
+        waiting=self.job(state='queued');unknown=self.job(state='unknown')
+        other=self.job(owner=OTHER,state='unknown');self.job(state='succeeded')
+        self.login(MEMBER)
+        self.assertEqual([j['id'] for j in self.call('jobs?filter=waiting').json['jobs']],[waiting])
+        self.assertEqual([j['id'] for j in self.call('jobs?filter=attention').json['jobs']],[unknown])
+        self.login(OWNER)
+        self.assertEqual({j['id'] for j in self.call('jobs?filter=attention').json['jobs']},{unknown,other})
 
     def test_conditions_exact_sku_and_unknown_not_permission(self):
         self.login()

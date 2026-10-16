@@ -25,11 +25,13 @@ from co_conditions import load_conditions, fold, condition_text
 from co_summary import aggregate, period, TZ
 from co_summary_view import details as summary_details
 
-VERSION = 1
+VERSION = 2
 COOKIE = '__Host-tao_session'
 SESSION_SECONDS = 900
 ROOT = Path(__file__).resolve().parent
 ACTIVE = ('draft', 'preview_queued', 'preview_running', 'queued', 'verified_queued', 'running', 'submitting', 'unknown')
+WAITING = ('draft', 'preview_queued', 'queued', 'verified_queued')
+PROCESSING = ('preview_running', 'running', 'submitting')
 LABELS = {'draft':'Chờ xác nhận', 'preview_queued':'Chờ nhập file', 'preview_running':'Đang lấy dữ liệu MWG',
           'queued':'Chờ tạo CO', 'verified_queued':'Chờ tạo CO', 'running':'Đang xử lý',
           'submitting':'Đang tạo CO', 'unknown':'Chưa rõ kết quả', 'succeeded':'Đã có kết quả CO',
@@ -181,7 +183,7 @@ def install(app, reply, default_users=()):
                 'requester':payload.get('requester_name') or 'Chưa có tên','mine':job['owner']==user['uid'],
                 'updated':job['updated'],'expires_at':deadline,'rows':[],
                 'can_confirm':job['state']=='draft' and bool(deadline and deadline>time.time()) and job['chat']!=DISABLED_CO_GROUP,
-                'can_cancel':job['state'] in ('draft','preview_queued','queued','verified_queued')}
+                'can_cancel':job['state'] in WAITING}
         policies=load_conditions() if details and any('iphone' in fold(x.get('product_name','')) for x in rows) else {}
         for item,outcome in zip(rows,results):
             public={k:item.get(k,'') for k in ('source','destination','source_name','destination_name','product','product_name','quantity','status')}
@@ -280,10 +282,11 @@ def install(app, reply, default_users=()):
         scope='1=1' if user['uid']==PRIVATE_CO_OWNER else 'owner=?'
         params=[] if user['uid']==PRIVATE_CO_OWNER else [user['uid']]
         selected=request.args.get('filter','active')
-        if selected not in ('active','done','all'):raise PortalError('Bộ lọc không hợp lệ.')
+        if selected not in ('active','waiting','attention','done','all'):raise PortalError('Bộ lọc không hợp lệ.')
         if selected!='all':
-            scope+=' AND state '+('IN' if selected=='active' else 'NOT IN')+' ('+','.join('?' for _ in ACTIVE)+')'
-            params+=list(ACTIVE)
+            states=WAITING if selected=='waiting' else ('unknown',) if selected=='attention' else ACTIVE
+            scope+=' AND state '+('NOT IN' if selected=='done' else 'IN')+' ('+','.join('?' for _ in states)+')'
+            params+=list(states)
         with q.db() as db:
             found=db.execute('SELECT * FROM jobs WHERE '+scope+' ORDER BY updated DESC,id LIMIT 21 OFFSET ?',tuple(params+[offset])).fetchall()
         return jsonify(jobs=[public_job(dict(j),user) for j in found[:20]],more=len(found)>20,offset=offset,server_time=time.time())
@@ -350,6 +353,40 @@ def install(app, reply, default_users=()):
         if not isinstance(enabled,bool):raise PortalError('Trạng thái không hợp lệ.')
         message=q.admin('BOT ON' if enabled else 'BOT OFF')
         return jsonify(message=message)
+
+    def waiting_snapshot(db):
+        # Called inside Queue.db(): the same transaction lock used by Mac claims.
+        rows=db.execute('SELECT id,state,updated FROM jobs WHERE state IN ('+
+                        ','.join('?' for _ in WAITING)+') ORDER BY id',WAITING).fetchall()
+        revision=hashlib.sha256(json.dumps([dict(r) for r in rows],sort_keys=True,
+                                          separators=(',',':')).encode()).hexdigest()
+        counts={r['state']:r['n'] for r in db.execute('SELECT state,COUNT(*) AS n FROM jobs GROUP BY state')}
+        return rows,dict(waiting=len(rows),processing=sum(counts.get(s,0) for s in PROCESSING),
+                         unknown=counts.get('unknown',0),revision=revision)
+
+    @bp.get('/api/admin/queue')
+    def queue_overview():
+        user=identity();require_owner(user);q.expire_confirmations()
+        with q.db() as db:_,overview=waiting_snapshot(db)
+        return jsonify(**overview)
+
+    @bp.post('/api/admin/cancel-waiting')
+    def cancel_waiting_all():
+        user=identity(True);require_owner(user);rate(('cancel-waiting',user['uid']),10)
+        revision=body().get('revision')
+        if not isinstance(revision,str) or not re.fullmatch(r'[0-9a-f]{64}',revision):
+            raise PortalError('Hãy tải lại hàng chờ trước khi hủy.')
+        with q.db() as db:
+            rows,overview=waiting_snapshot(db)
+            if not hmac.compare_digest(revision,overview['revision']):
+                raise PortalError('Hàng chờ đã thay đổi. Tải lại và kiểm tra số yêu cầu trước khi hủy.',409)
+            # Preserve payload/result history. Never touch work already claimed by Mac.
+            db.execute("UPDATE jobs SET state='cancelled',lease=NULL,notified=1,updated=? WHERE state IN ("+
+                       ','.join('?' for _ in WAITING)+')',(time.time(),)+WAITING)
+            for row in rows:db.execute('DELETE FROM preview_replies WHERE job_id=?',(row['id'],))
+        message=(f'Đã hủy {len(rows)} yêu cầu chờ của tất cả người dùng, trong mọi chat. '
+                 'Yêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo được giữ nguyên.')
+        return jsonify(cancelled=len(rows),message=message)
 
     @bp.get('/api/admin/locks')
     def locks():
