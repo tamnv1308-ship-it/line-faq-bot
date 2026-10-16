@@ -31,7 +31,11 @@ class AdminTests(unittest.TestCase):
     def test_off_persists_despite_heartbeat_and_stops_claim(self):
         self.q.heartbeat();j=self.q.draft('e','o','c',self.p)
         self.q.confirm(j['id'],'o','c')
-        self.q.admin('BOT OFF');self.q.heartbeat()
+        notice=self.q.admin('BOT OFF');self.q.heartbeat()
+        self.assertIn('BOT đã hết hạn kết nối',notice)
+        self.assertIn('tiền cà phê',notice)
+        with self.q.db() as db:
+            self.assertIn('BOT đã hết hạn kết nối',self.q.unavailable(db))
         self.assertIsNone(self.q.claim(require_online=True))
         self.assertIn('ADM tạm dừng: có',self.q.admin('BOT STATUS'))
         self.q.admin('BOT ON');self.assertIsNotNone(self.q.claim(require_online=True))

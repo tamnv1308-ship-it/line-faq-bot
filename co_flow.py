@@ -37,6 +37,7 @@ CANCEL_QUIPS = (
 HONORS_VERSION = 2
 RESULT_RECOVERY_VERSION = 1
 LATE_RESULT_VERSION = 2
+BOT_OFF_NOTICE = '💸 BOT đã hết hạn kết nối!\nVui lòng nạp thêm tiền cà phê để gia hạn ☕😆'
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -259,7 +260,7 @@ class Queue:
     def unavailable(self, db):
         row=db.execute('SELECT enabled,heartbeat FROM co_control WHERE id=1').fetchone()
         if not row['enabled']:
-            return 'Bot đang tạm ngừng nhận yêu cầu CO. Chưa lưu yêu cầu; vui lòng gửi lại khi bot hoạt động.'
+            return BOT_OFF_NOTICE+'\n\nBot đang tạm ngừng nhận CO. Chưa lưu yêu cầu; vui lòng gửi lại khi bot hoạt động.'
         if time.time()-row['heartbeat']>30:
             return 'Bot trên Mac đang offline hoặc mất kết nối. Chưa nhận yêu cầu CO; vui lòng gửi lại khi Mac hoạt động.'
         health=readiness(db)
@@ -279,7 +280,7 @@ class Queue:
         with self.db() as db:
             if command=='BOT OFF':
                 db.execute('UPDATE co_control SET enabled=0 WHERE id=1')
-                return 'Đã tắt nhận CO mới và tạm dừng lấy việc từ hàng chờ. Việc đang xử lý vẫn hoàn tất; yêu cầu cũ được giữ lại. !bot on để mở lại.'
+                return BOT_OFF_NOTICE+'\n\nĐã tắt nhận CO mới và tạm dừng lấy việc từ hàng chờ. Việc đang xử lý vẫn hoàn tất; yêu cầu cũ được giữ lại. !bot on để mở lại.'
             if command=='BOT ON':
                 row=db.execute('SELECT heartbeat FROM co_control WHERE id=1').fetchone()
                 if time.time()-row['heartbeat']>30:
@@ -764,7 +765,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
-                       late_result_version=LATE_RESULT_VERSION)
+                       late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=1)
 
     @app.post('/co/worker/conditions/reload')
     def conditions_reload():
