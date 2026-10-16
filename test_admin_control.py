@@ -32,10 +32,10 @@ class AdminTests(unittest.TestCase):
         self.q.heartbeat();j=self.q.draft('e','o','c',self.p)
         self.q.confirm(j['id'],'o','c')
         notice=self.q.admin('BOT OFF');self.q.heartbeat()
-        self.assertIn('BOT đã hết hạn kết nối',notice)
-        self.assertIn('tiền cà phê',notice)
+        self.assertIn('Kết nối BOT đã hết hạn.',notice)
+        self.assertIn('nạp tiền để gia hạn dịch vụ',notice)
         with self.q.db() as db:
-            self.assertIn('BOT đã hết hạn kết nối',self.q.unavailable(db))
+            self.assertIn('Kết nối BOT đã hết hạn.',self.q.unavailable(db))
         self.assertIsNone(self.q.claim(require_online=True))
         self.assertIn('ADM tạm dừng: có',self.q.admin('BOT STATUS'))
         self.q.admin('BOT ON');self.assertIsNotNone(self.q.claim(require_online=True))
