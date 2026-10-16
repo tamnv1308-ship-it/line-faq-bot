@@ -37,7 +37,7 @@ CANCEL_QUIPS = (
 HONORS_VERSION = 2
 RESULT_RECOVERY_VERSION = 1
 LATE_RESULT_VERSION = 2
-BOT_OFF_NOTICE = 'Kết nối BOT đã hết hạn.\nVui lòng nạp tiền để gia hạn dịch vụ. Liên hệ quản trị viên để được hỗ trợ.'
+BOT_OFF_NOTICE = 'Gói cước đã hết hạn.\nVui lòng gia hạn để tiếp tục trải nghiệm dịch vụ.'
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -765,7 +765,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
-                       late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=2)
+                       late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3)
 
     @app.post('/co/worker/conditions/reload')
     def conditions_reload():
