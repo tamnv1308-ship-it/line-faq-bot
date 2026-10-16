@@ -14,6 +14,119 @@ def row(**changes):
 
 
 class EditableParsingTests(unittest.TestCase):
+    def test_previous_customer_message_formats(self):
+        # Regressions from actual pasted layouts; contact names/IMEI are anonymized.
+        cases=[
+            ('''Em chào Anh, nhờ anh tạo lệnh giúp em với ạ :&#x20;
+Apple Studio Display Standard 27"Retina 5K/60Hz/600cd2/Thunderbolt 3/USB-C/ (MKOU3SA/A)bạc
+MSP : 3641273000143
+Imei : TESTSERIAL123
+Trạng thái : đã sử dụng
+Kho Xuất : 15078
+Kho Nhận :  1537
+Hình thức vận chuyển nội bộ
+QLST đã liên hệ và đồng ý cho hàng nhờ anh tạo giúp ạ''',
+             [('15078','1537','3641273000143','1','Đã sử dụng')]),
+            ('''St trả cọc cho KH ạ&#x20;
+Mã đơn trả cọc :
+10336SO26090063520
+Điện thoại iPhone 18 Pro Max 256GB Slive
+0131491005413  &#x20;
+Kho xuất : 114
+Kho nhận : 10336
+
+St trả cọc cho KH ạ&#x20;
+Mã đơn trả cọc : YC xuất: 10336SO26090063420
+Điện thoại iPhone 18 Pro Max 256GB Burgundy
+0131491005411  &#x20;
+Kho xuất : 2184
+Kho nhận : 10336''',
+             [('114','10336','0131491005413','1','Mới'),('2184','10336','0131491005411','1','Mới')]),
+            ('''🛑 FORM mẫu XIN HÀNG :
+Khác Tỉnh
+- Mã kho xuất: 10323 - AAR_CTH_NKI - Số 08 Hoà Bình
+- Mã kho nhận: 1759 ĐML Giồng Riềng
+- MSP:0131491004725
+- Tên sp: Điện thoại iPhone 17 Pro Max 256GB Silver
+  (:)
+- Trạng thái: mới
+- Số Lượng:  1
+- Lý do: KH mua mới
+- QL xin hàng :
+- Hình thức lấy hàng: NV lấy
+Nhờ chị hỗ trợ tạo lệnh giúp em với ạ!''',
+             [('10323','1759','0131491004725','1','Mới')]),
+            ('''Nhờ anh/chị NH tạo lệnh giúp em
+Điện thoại iPhone 18 Pro Max 256GB Black
+KD bình thường 0131491005414  &#x20;
+kho xuât : 1093
+kho nhận : 7246
+SL : 1
+QL cho hàng: Người phụ trách
+Nhờ @DM xác nhận giúp ST''',
+             [('1093','7246','0131491005414','1','Mới')]),
+            ('''Nhờ ngành hàng tạo lệnh điều chuyển iPhone 18 pro max 512GB Xanh .
+1. MSP: 0131491005416
+2. Tên SP: Điện thoại iPhone 18 Pro Max 512GB Xanh.
+Kho xuất: 5108 Gia Trấn
+Kho nhận: 1149- Nho Quan
+Số lượng: 1
+Trả đơn preoder:01149SO26090552643
+QL cho hàng: @Người phụ trách
+Em nhờ anh duyệt giúp em ạ.''',
+             [('5108','1149','0131491005416','1','Mới')]),
+            ('''Em Nhờ NH tạo lệnh xin hàng giúp ST ạ!
+- 18prm 256gb : đen
+- Kho chuyển:  8902
+- Kho nhận: 12563
+  Sp 1
+- Msp: 0131491005414
+Qlst cho hàng: Người phụ trách
+Nhờ ac DM vùng hỗ trợ xác nhận giúp em ạ!''',
+             [('8902','12563','0131491005414','1','Mới')]),
+            ('- \ufeff\ufeffMã kho xuất: 9469\n\n- \ufeff\ufeffMã kho nhận: 7298\n\n- \ufeff\ufeffMSP: 0131491005416\n\n- \ufeff\ufeffTên sp: Điện thoại iPhone 18 Pro Max 512GB Glacier\n(Barcode: 195951411699)\n\n- Số Lượng : 1',
+             [('9469','7298','0131491005416','1','Mới')]),
+            ('''msp 0131491005418
+Điện thoại iPhone 18 Pro Max 512GB Black
+Kho xuất : 2869
+Kho nhập : 10838
+QL cho hàng : Người A
+\\================
+msp 0131491005418    &#x20;
+Sl : 1&#x20;
+Kho xuất : 377
+Kho nhập : 3978
+QL cho hàng : Người B
+\\==============
+Điện thoại iPhone 18 Pro Max 1TB Black
+ma san pham 0131491005422
+Kho xuất: 1814&#x20;
+Kho nhận: 11494
+Số lượng: 1
+Ql cho hàng Người C
+
+Điện thoại iPhone 18 Pro Max 1TB Black
+msp 0131491005422
+Kho xuất: 13910
+Kho nhận: 11494
+QL cho hàng Người D
+Có khách mua ở siêu thị
+\\==============
+Kho chuyển : 308
+Kho nhận : 4360
+Số lượng : 1
+&#x20;SP : 0131491005397
+@Người phụ trách em ơi, tạo giúp a nha''',
+             [('2869','10838','0131491005418','1','Mới'),('377','3978','0131491005418','1','Mới'),
+              ('1814','11494','0131491005422','1','Mới'),('13910','11494','0131491005422','1','Mới'),
+              ('308','4360','0131491005397','1','Mới')])]
+        for text,expected in cases:
+            with self.subTest(expected=expected):
+                result=compose.parse_editable(text)
+                actual=[tuple(row[key] for key in ('source','destination','product','quantity','status')) for row in result['rows']]
+                self.assertEqual(actual,expected)
+                self.assertTrue(result['valid'],result)
+
     def test_aliases_copy_markers_and_defaults(self):
         result=compose.parse_editable('- \ufeffMã kho chuyển: 3945 - Shop A\nKho nhập: 447-Shop B\nMã code: 0131491005415&#x20;\nQL cho hàng: Tư 24261')
         self.assertTrue(result['valid'],result)
