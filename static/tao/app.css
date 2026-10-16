@@ -131,5 +131,39 @@
 
 #tao-app .tao-phone .tao-inline-actions .tao-cancel-all{margin-top:0}
 
+/* Multi-request intake: compact summaries with independent editable rows. */
+#tao-app .tao-phone .tao-compose-source-toggle{min-height:44px;margin:-8px 0 10px;font-size:12px;gap:7px}
+#tao-app .tao-phone .tao-compose-source-toggle svg{width:16px;height:16px}
+#tao-app .tao-phone .tao-compose-overview{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px;background:var(--tao-soft);color:var(--tao-green);padding:12px 13px;border-radius:13px;margin-bottom:10px;font-size:12px}
+#tao-app .tao-phone .tao-compose-overview strong{font-weight:650}
+#tao-app .tao-phone .tao-compose-hint{margin-bottom:12px;font-size:12px}
+#tao-app .tao-phone .tao-compose-list{display:grid;gap:10px;margin-top:10px}
+#tao-app .tao-phone .tao-compose-row{background:var(--tao-paper);border:1px solid var(--tao-line);border-radius:15px;overflow:hidden;min-width:0}
+#tao-app .tao-phone .tao-compose-toggle{width:100%;display:flex;align-items:flex-start;gap:10px;padding:13px 12px;text-align:left}
+#tao-app .tao-phone .tao-compose-toggle:focus-visible{outline-offset:-3px;border-radius:14px}
+#tao-app .tao-phone .tao-compose-number{display:grid;place-items:center;flex:0 0 27px;min-height:27px;border-radius:9px;background:var(--tao-soft);color:var(--tao-green);font-size:12px;font-weight:650}
+#tao-app .tao-phone .tao-compose-summary{flex:1;min-width:0;display:block}
+#tao-app .tao-phone .tao-compose-route{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:16px;font-weight:650;letter-spacing:-.2px;overflow-wrap:anywhere}
+#tao-app .tao-phone .tao-compose-route span{min-width:0;overflow-wrap:anywhere}
+#tao-app .tao-phone .tao-compose-route svg{width:14px;height:14px;color:var(--tao-muted)}
+#tao-app .tao-phone .tao-compose-code{display:block;font-size:12px;color:var(--tao-muted);margin-top:2px;overflow-wrap:anywhere}
+#tao-app .tao-phone .tao-compose-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;font-size:11px}
+#tao-app .tao-phone .tao-compose-meta>span{display:inline-flex;align-items:center;padding:2px 6px;border-radius:5px;background:var(--tao-bg);color:var(--tao-muted);overflow-wrap:anywhere;min-width:0}
+#tao-app .tao-phone .tao-compose-edit-label{display:flex;align-items:center;justify-content:flex-end;gap:4px;flex-shrink:0;color:var(--tao-green);font-size:12px;min-height:27px}
+#tao-app .tao-phone .tao-compose-edit-label>span{font-size:17px}
+#tao-app .tao-phone .tao-compose-invalid{display:block;font-size:12px;color:var(--tao-red);margin-top:8px;overflow-wrap:anywhere}
+#tao-app .tao-phone .tao-compose-body{border-top:1px solid var(--tao-line);padding:14px 12px}
+#tao-app .tao-phone .tao-compose-body[hidden],#tao-app .tao-phone #compose-source[hidden]{display:none}
+#tao-app .tao-phone .tao-compose-row-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
+#tao-app .tao-phone .tao-compose-row-actions svg{width:16px;height:16px}
+#tao-app .tao-phone .tao-compose-row-actions .tao-compose-remove{color:var(--tao-red);min-height:44px;font-size:12px}
+#tao-app .tao-phone .tao-compose-row-actions .tao-secondary{gap:6px;min-height:44px;padding:10px 14px;background:var(--tao-soft);color:var(--tao-green)}
+#tao-app .tao-phone .tao-compose-row .tao-row-warning{padding:0 12px 12px;margin:0;font-size:12px;color:var(--tao-amber)}
+#tao-app .tao-phone .tao-compose-destination{margin-top:14px}
+#tao-app .tao-phone .tao-compose-destination>strong{font-size:13px;overflow-wrap:anywhere}
+#tao-app .tao-phone .tao-compose-destination .tao-hint{margin:10px 0 0}
+#tao-app .tao-phone .tao-compose-submit-hint{margin:10px 0 0;text-align:center}
+@media(max-width:360px){#tao-app .tao-phone .tao-compose-toggle{padding:12px 10px;gap:7px}#tao-app .tao-phone .tao-compose-route{font-size:15px;gap:6px}#tao-app .tao-phone .tao-compose-edit-label{font-size:11px}#tao-app .tao-phone .tao-compose-body .tao-compose-fields{gap:12px 8px}}
+
 #tao-app .tao-phone .tao-attestation{display:flex;align-items:flex-start;gap:12px;font-size:14px;line-height:1.6;margin:18px 0;padding:14px;border:1px solid var(--tao-line);border-radius:12px;background:var(--tao-soft)}#tao-app .tao-phone .tao-attestation input{flex-shrink:0;width:22px;height:22px;accent-color:var(--tao-green);margin:1px 0 0}
 #tao-app .tao-phone .tao-wide{width:100%;margin-top:12px;display:flex;align-items:center;justify-content:center;gap:8px}#tao-app .tao-phone .tao-wide svg{width:18px;height:18px}#tao-app .tao-phone textarea,#tao-app .tao-phone select{font:inherit;color:var(--tao-ink)}#tao-app .tao-phone .tao-paste,#tao-app .tao-phone .tao-scope,#tao-app .tao-phone .tao-compose-fields input,#tao-app .tao-phone .tao-compose-fields textarea,#tao-app .tao-phone .tao-compose-fields select{box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--tao-line);background:var(--tao-bg);border-radius:10px;padding:12px;font-size:16px;line-height:1.5;color:var(--tao-ink)}#tao-app .tao-phone textarea{resize:vertical}#tao-app .tao-phone .tao-compose-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px 12px}#tao-app .tao-phone .tao-compose-field.full{grid-column:1/-1}#tao-app .tao-phone .tao-compose-field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}#tao-app .tao-phone .tao-field-error{font-size:12px;color:var(--tao-red);line-height:1.5;margin-top:5px}#tao-app .tao-phone .tao-compose-fields [aria-invalid=true]{border-color:var(--tao-red)}#tao-app .tao-phone .tao-wide:disabled{opacity:.5}#tao-app .tao-phone textarea:focus-visible,#tao-app .tao-phone select:focus-visible{outline:3px solid var(--tao-green);outline-offset:2px}

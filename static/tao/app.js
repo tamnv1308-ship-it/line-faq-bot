@@ -5,7 +5,7 @@
   const notice=document.getElementById('notice'), progress=document.getElementById('progress');
   const state={page:'home',me:null,jobs:[],filter:'active',period:'today',offset:0,more:false,job:null,search:'',lookup:null,conditions:null,summary:null,locks:[],queueOverview:null,cancelPreview:null,unknownReview:null,unknownChecked:false,busy:false,clock:0};
   let activeRefresh=0, serial=0, timer=null, liffReady=false, config=null;
-  const editor={text:'',review:null,scope:'group',options:null,pending:null};
+  const editor={text:'',review:null,scope:'group',options:null,pending:null,openRow:-1,showSource:true};
   const paths={search:'m21 21-5-5M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16',
     home:'m3 10 9-7 9 7v10H3ZM9 20v-7h6v7',layers:'m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 17l10 5 10-5',
     check:'m5 12 4 4L19 6',arrow:'M4 12h16m-6-6 6 6-6 6',back:'M20 12H4m6-6-6 6 6 6',right:'m9 5 7 7-7 7',
@@ -54,41 +54,60 @@
     return `<div class="tao-greeting"><div><div class="tao-kicker">Công cụ Táo</div><h1>Chào ${esc(me.owner?'Tâm':me.name)} 👋</h1><p class="tao-subtitle">Mọi việc gọn trong một chỗ.</p></div><span class="tao-avatar">${esc(me.name.trim().charAt(0).toUpperCase())}</span></div><div class="tao-live"><b class="${health.mwg_ready?'':'not-ready'}"><span class="tao-dot"></span>${esc(health.worker_label)}</b><span>${me.enabled?'Nhận CO theo quyền hiện tại':'Chỉ Tâm được tạo CO'}</span></div>${me.notice?`<div class="tao-info-card tao-long-text">${esc(me.notice)}</div>`:''}<div class="tao-grid">${tools.map(([p,i,t,d],n)=>`<button class="tao-tool ${n===0?'tao-tool-featured':''}" data-go="${p}"><span class="tao-tool-icon">${icon(i)}</span><strong>${t}</strong><small>${d}</small></button>`).join('')}</div><div class="tao-section-heading"><h2>Yêu cầu đang xử lý</h2><button class="tao-link" data-go="queue">Xem tất cả ${icon('arrow')}</button></div>${state.jobs.length?state.jobs.slice(0,2).map(jobCard).join(''):'<div class="tao-info-card tao-empty">Không có yêu cầu đang chờ.</div>'}${me.admin?`<button class="tao-admin-entry" data-go="admin">${icon('shield')}<span>${me.owner?'Quản lý của Tâm':'Quản lý ADM'}<small>${me.owner?'Bật/tắt bot · Mở khóa · Hàng chờ':'Bật/tắt nhận CO · Trạng thái bot'}</small></span>${icon('right')}</button>`:''}`;
   }
   const fieldLabels={source:'Kho xuất',destination:'Kho nhận',product:'Mã sản phẩm',quantity:'Số lượng',status:'Trạng thái',note:'Note'};
+  function composeTotals(){
+    const rows=editor.review.rows,quantities=rows.map(row=>/^\d{1,6}$/.test(row.quantity)?Number(row.quantity):NaN);
+    return rows.length+' lệnh'+(quantities.every(q=>Number.isFinite(q)&&q>0)?' · '+number(quantities.reduce((sum,q)=>sum+q,0))+' sản phẩm':' · Kiểm tra số lượng');
+  }
+  function composeRowSummary(row,i){
+    const bad=Object.keys(editor.review.errors[i]||{});
+    return `<span class="tao-compose-number">${i+1}</span><span class="tao-compose-summary"><span class="tao-compose-route"><span>${esc(row.source||'Kho xuất')}</span>${icon('arrow')}<span>${esc(row.destination||'Kho nhận')}</span></span><span class="tao-compose-code">MSP ${esc(row.product||'Chưa điền')}</span><span class="tao-compose-meta"><span>SL ${esc(row.quantity||'—')}</span><span>${esc(row.status||'Chưa chọn trạng thái')}</span>${row.note?'<span>Có Note</span>':''}</span>${bad.length?`<span class="tao-compose-invalid">Cần sửa: ${bad.map(key=>fieldLabels[key]||key).map(esc).join(', ')}</span>`:''}</span><span class="tao-compose-edit-label">${editor.openRow===i?'Thu gọn':'Sửa'}<span aria-hidden="true">${editor.openRow===i?'−':'+'}</span></span>`;
+  }
+  function showComposeErrors(){
+    const index=editor.review?.errors.findIndex(row=>Object.keys(row).length);
+    if(index>=0)editor.openRow=index;
+  }
   function compose(){
     const review=editor.review,options=editor.options,locked=!!editor.pending||state.busy;
     const field=(row,i,key)=>{
       const id='compose-'+i+'-'+key,value=row[key]||'',bad=review.errors[i]?.[key]||'';
       const attrs=`id="${id}" data-row="${i}" data-field="${key}" aria-describedby="${id}-error" aria-invalid="${!!bad}" ${locked?'disabled':''}`;
       const control=key==='status'?`<select ${attrs}>${!options?.statuses.includes(value)?`<option value="${esc(value)}">${esc(value||'Chọn trạng thái')}</option>`:''}${(options?.statuses||[]).map(v=>`<option ${v===value?'selected':''}>${esc(v)}</option>`).join('')}</select>`:key==='note'?`<textarea ${attrs} rows="3" maxlength="500">${esc(value)}</textarea>`:`<input ${attrs} type="text" inputmode="numeric" autocomplete="off" value="${esc(value)}">`;
-      return `<div class="tao-compose-field ${['product','status','note'].includes(key)?'full':''}"><label for="${id}">${fieldLabels[key]}</label>${control}<small id="${id}-error" class="tao-field-error" ${bad?'':'hidden'}>${esc(bad)}</small></div>`;
+      return `<div class="tao-compose-field ${['product','note'].includes(key)?'full':''}"><label for="${id}">${fieldLabels[key]}</label>${control}<small id="${id}-error" class="tao-field-error" ${bad?'':'hidden'}>${esc(bad)}</small></div>`;
     };
-    return title('Tạo yêu cầu','Dán tin nhắn, kiểm tra rồi gửi')+`<div class="tao-info-card"><label class="tao-label" for="compose-text">Tin nhắn cần tạo CO</label><textarea id="compose-text" class="tao-paste" rows="6" maxlength="10000" placeholder="Dán nguyên tin nhắn có kho xuất, kho nhận, MSP…" ${locked?'disabled':''}>${esc(editor.text)}</textarea><p class="tao-hint">Không ghi số lượng: 1 · Không ghi trạng thái: Mới.</p><button class="tao-primary tao-wide" data-action="compose-parse" ${locked?'disabled':''}>${icon('layers')}${review?'Tách lại tin nhắn':'Tách thành form'}</button></div>${review?`<div class="tao-section-heading"><h2>${review.rows.length} dòng yêu cầu</h2><span class="tao-badge neutral">Tối đa ${options?.max_rows||7}</span></div><p class="tao-hint">Tên sản phẩm sẽ được lấy từ MWG sau khi gửi. Bot tự thêm thông tin liên hệ người gửi vào Note.</p><div id="compose-global" class="tao-field-error" role="status">${review.global_errors.map(esc).join('<br>')}</div>${review.rows.map((row,i)=>`<section class="tao-info-card" aria-label="Dòng ${i+1}"><div class="tao-section-heading"><h2>Dòng ${i+1}</h2><button class="tao-link" data-remove-row="${i}" ${locked?'disabled':''}>Xóa dòng ${i+1}</button></div><div class="tao-compose-fields">${Object.keys(fieldLabels).map(key=>field(row,i,key)).join('')}</div>${review.warnings.filter(w=>w.row===i).map(w=>`<p class="tao-hint tao-row-warning">${esc(w.message)}</p>`).join('')}</section>`).join('')}<button class="tao-secondary tao-wide" data-action="compose-add" ${locked||review.rows.length>=(options?.max_rows||7)?'disabled':''}>+ Thêm dòng</button><div class="tao-info-card"><label class="tao-label" for="compose-scope">Gửi yêu cầu vào</label><select id="compose-scope" class="tao-scope" ${locked?'disabled':''}>${(options?.scopes||[]).map(s=>`<option value="${s.value}" ${s.value===editor.scope?'selected':''}>${esc(s.label)}</option>`).join('')}</select><p class="tao-hint">Sau khi MWG trả thông tin, em vẫn cần Xác nhận trong 1 phút để tạo CO.</p></div>${editor.pending?'<div class="tao-info-card"><p class="tao-product">Đang giữ nguyên lần gửi để tránh tạo trùng. Kiểm tra xem bot đã nhận chưa.</p><button class="tao-primary tao-wide" data-action="compose-recover">Kiểm tra lần gửi</button><button class="tao-secondary tao-wide" data-action="compose-submit">Thử gửi lại cùng yêu cầu</button></div>':`<div class="tao-actions"><button class="tao-primary tao-wide" data-action="compose-submit" ${!review.rows.length?'disabled':''}>${icon('arrow')}Gửi yêu cầu · Chưa tạo CO</button></div>`}`:''}`;
+    const source=`<div id="compose-source" class="tao-info-card" ${review&&!editor.showSource?'hidden':''}><label class="tao-label" for="compose-text">${review?'Tin nhắn đã dán':'Tin nhắn cần tạo CO'}</label><textarea id="compose-text" class="tao-paste" rows="6" maxlength="10000" placeholder="Dán một hoặc nhiều lệnh có kho xuất, kho nhận, MSP…" ${locked?'disabled':''}>${esc(editor.text)}</textarea><p class="tao-hint">Không ghi số lượng: 1 · Không ghi trạng thái: Mới.${review?'<br>Tách lại sẽ thay các dòng đang sửa bằng nội dung tin nhắn này.':''}</p><button class="tao-primary tao-wide" data-action="compose-parse" ${locked?'disabled':''}>${icon('layers')}${review?'Tách lại tin nhắn':'Tách thành form'}</button></div>`;
+    if(!review)return title('Tạo yêu cầu','Dán nhiều lệnh, tách rồi sửa từng dòng')+source;
+    const scopes=options?.scopes||[],selectedScope=scopes.find(s=>s.value===editor.scope);
+    return title('Đã tách '+review.rows.length+' lệnh','Chạm Sửa để chỉnh từng lệnh; Note giữ riêng theo dòng.')+`<button class="tao-link tao-compose-source-toggle" data-action="compose-source" aria-expanded="${editor.showSource}" aria-controls="compose-source" ${locked?'disabled':''}>${icon('layers')}${editor.showSource?'Ẩn tin nhắn đã dán':'Xem tin nhắn đã dán'}${icon('right')}</button>${source}<div class="tao-compose-overview"><strong id="compose-total">${esc(composeTotals())}</strong><span>Tối đa ${options?.max_rows||7} dòng</span></div><p class="tao-hint tao-compose-hint">Tên sản phẩm lấy từ MWG sau khi gửi. Bot tự thêm thông tin liên hệ vào Note.</p><div id="compose-global" class="tao-field-error" role="status">${review.global_errors.map(esc).join('<br>')}</div><div class="tao-compose-list">${review.rows.map((row,i)=>`<section class="tao-compose-row" aria-label="Dòng ${i+1}"><button id="compose-toggle-${i}" class="tao-compose-toggle" data-compose-row="${i}" aria-expanded="${editor.openRow===i}" aria-controls="compose-body-${i}" ${locked?'disabled':''}>${composeRowSummary(row,i)}</button><div id="compose-body-${i}" class="tao-compose-body" ${editor.openRow===i?'':'hidden'}><div class="tao-compose-fields">${Object.keys(fieldLabels).map(key=>field(row,i,key)).join('')}</div><div class="tao-compose-row-actions"><button class="tao-link tao-compose-remove" data-remove-row="${i}" ${locked?'disabled':''}>${icon('x')}Xóa dòng ${i+1}</button><button class="tao-secondary" data-compose-done="${i}" ${locked?'disabled':''}>${icon('check')}Xong</button></div></div>${review.warnings.filter(w=>w.row===i).map(w=>`<p class="tao-hint tao-row-warning">${esc(w.message)}</p>`).join('')}</section>`).join('')}</div><button class="tao-secondary tao-wide" data-action="compose-add" ${locked||review.rows.length>=(options?.max_rows||7)?'disabled':''}>+ Thêm dòng</button><div class="tao-info-card tao-compose-destination">${scopes.length>1?`<label class="tao-label" for="compose-scope">Gửi yêu cầu vào</label><select id="compose-scope" class="tao-scope" ${locked?'disabled':''}>${scopes.map(s=>`<option value="${esc(s.value)}" ${s.value===editor.scope?'selected':''}>${esc(s.label)}</option>`).join('')}</select>`:`<span class="tao-label">Gửi yêu cầu vào</span><strong>${esc(selectedScope?.label||'Nhóm được cấp quyền')}</strong>`}<p class="tao-hint">Các dòng cùng trạng thái sẽ nhập chung một file. Em vẫn cần Xác nhận trong 1 phút để tạo CO.</p></div>${editor.pending?'<div class="tao-info-card"><p class="tao-product">Đang giữ nguyên lần gửi để tránh tạo trùng. Kiểm tra xem bot đã nhận chưa.</p><button class="tao-primary tao-wide" data-action="compose-recover">Kiểm tra lần gửi</button><button class="tao-secondary tao-wide" data-action="compose-submit">Thử gửi lại cùng yêu cầu</button></div>':`<div class="tao-actions"><button class="tao-primary tao-wide" data-action="compose-submit" ${!review.rows.length?'disabled':''}>${icon('arrow')}Gửi yêu cầu · ${review.rows.length} dòng</button></div><p class="tao-hint tao-compose-submit-hint">Chưa tạo CO. Bot sẽ lấy dữ liệu để em kiểm tra và Xác nhận.</p>`}`;
   }
   function composeEdit(target){
     if(target.id==='compose-text'){editor.text=target.value;return;}
     if(target.id==='compose-scope'){editor.scope=target.value;return;}
     const key=target.dataset.field,index=Number(target.dataset.row),review=editor.review;
-    if(!key||!review?.rows[index]||editor.pending)return;
+    if(!Object.hasOwn(fieldLabels,key)||!review?.rows[index]||editor.pending)return;
+    error('');
     review.rows[index][key]=target.value;
     delete review.errors[index][key];review.warnings=[];
     target.setAttribute('aria-invalid','false');document.getElementById(target.id+'-error').hidden=true;
     review.global_errors=[];document.getElementById('compose-global').textContent='';
     main.querySelectorAll('.tao-row-warning').forEach(el=>el.remove());
+    document.getElementById('compose-toggle-'+index).innerHTML=composeRowSummary(review.rows[index],index);
+    document.getElementById('compose-total').textContent=composeTotals();
     // Full validation runs on the server again before a request enters the queue.
   }
   async function composeAction(action){
     if(state.busy)return;
     state.busy=true;++serial;loading(true);error('');
     main.querySelectorAll('button,input,textarea,select').forEach(el=>el.disabled=true);
-    let destination=null;
+    let destination=null,focusError=false;
     try{
       if(action==='parse'){
         editor.review=await api('compose/parse',{method:'POST',body:JSON.stringify({text:editor.text})});
+        editor.showSource=false;editor.openRow=-1;showComposeErrors();focusError=!editor.review.valid;
       }else if(action==='submit'){
         if(!editor.pending){
           const review=await api('compose/validate',{method:'POST',body:JSON.stringify({rows:editor.review.rows})});
           editor.review=review;
-          if(!review.valid){error('Sửa các ô đang báo lỗi trước khi gửi.');return;}
+          if(!review.valid){showComposeErrors();focusError=true;error('Sửa các ô đang báo lỗi trước khi gửi.');return;}
           editor.pending={key:crypto.randomUUID().replaceAll('-',''),scope:editor.scope,rows:review.rows};
         }
         const response=await api('compose/submit',{method:'POST',body:JSON.stringify(editor.pending)});
@@ -101,14 +120,20 @@
         else error('Chưa thấy yêu cầu được ghi nhận. Em có thể thử gửi lại cùng yêu cầu bằng nút bên dưới.');
       }
     }catch(e){
-      if(e.data?.review)editor.review=e.data.review;
+      if(e.data?.review){editor.review=e.data.review;showComposeErrors();focusError=true;}
       if(e.status&&e.status<500&&e.status!==401&&e.status!==429)editor.pending=null;
       error(e.message);
       if(e.status===401){loginScreen('Phiên đăng nhập hết hạn. Form đang sửa vẫn được giữ trong trang này.');return;}
     }finally{
       state.busy=false;loading(false);
-      if(destination){editor.review=null;editor.text='';await go('detail',destination.id);}
-      else render();
+      if(destination){editor.review=null;editor.text='';editor.openRow=-1;editor.showSource=true;await go('detail',destination.id);}
+      else{
+        render();
+        if(focusError&&state.page==='compose'){
+          const field=main.querySelector('.tao-compose-fields [aria-invalid="true"]');
+          if(field)field.focus();else document.getElementById('compose-global')?.scrollIntoView({block:'center'});
+        }
+      }
     }
   }
   async function acknowledgePreview(){
@@ -227,9 +252,17 @@
     if(button.dataset.filter){state.filter=button.dataset.filter;await refresh();return;}
     if(button.dataset.period){state.period=button.dataset.period;await refresh();return;}
     if(button.dataset.copy){try{await navigator.clipboard.writeText(button.dataset.copy);error('Đã sao chép mã CO.');}catch{error('Em nhấn giữ mã CO để sao chép nhé.');}return;}
+    if(button.dataset.composeRow!==undefined&&!editor.pending){
+      const index=Number(button.dataset.composeRow);editor.openRow=editor.openRow===index?-1:index;render();
+      document.getElementById('compose-toggle-'+index)?.focus({preventScroll:true});return;
+    }
+    if(button.dataset.composeDone!==undefined&&!editor.pending){
+      const index=Number(button.dataset.composeDone);editor.openRow=-1;render();
+      document.getElementById('compose-toggle-'+index)?.focus({preventScroll:true});return;
+    }
     if(button.dataset.removeRow!==undefined&&!editor.pending){
       const index=Number(button.dataset.removeRow);editor.review.rows.splice(index,1);editor.review.errors.splice(index,1);
-      editor.review.warnings=[];editor.review.global_errors=[];render();return;
+      editor.review.warnings=[];editor.review.global_errors=[];editor.openRow=-1;error('');render();return;
     }
     if(button.dataset.unlock!==undefined){
       const row=state.locks[Number(button.dataset.unlock)];
@@ -238,13 +271,14 @@
       }return;
     }
     switch(button.dataset.action){
+      case 'compose-source':if(!editor.pending){editor.showSource=!editor.showSource;render();}break;
       case 'compose-parse':await composeAction('parse');break;
       case 'compose-submit':await composeAction('submit');break;
       case 'compose-recover':await composeAction('recover');break;
       case 'compose-add':
         if(editor.review&&!editor.pending&&editor.review.rows.length<(editor.options?.max_rows||7)){
           editor.review.rows.push({source:'',destination:'',product:'',quantity:'1',status:editor.review.rows[0]?.status||'Mới',note:''});
-          editor.review.errors.push({});render();
+          editor.review.errors.push({});editor.openRow=editor.review.rows.length-1;render();
         }break;
       case 'login':
         try{loading(true);error('');if(!liffReady){await liff.init({liffId:config.liff_id});liffReady=true;}if(!liff.isLoggedIn())liff.login({redirectUri:location.origin+'/tao/'});else await authenticate();}catch(e){error(e.message);loading(false);}break;
@@ -279,7 +313,7 @@
           await mutate('admin/intake',{enabled});await refresh(true);
         }break;}
       case 'logout':
-        if(await mutate('logout')){editor.text='';editor.review=null;editor.pending=null;if(liffReady)liff.logout();loginScreen('Đã đăng xuất.');}break;
+        if(await mutate('logout')){editor.text='';editor.review=null;editor.pending=null;editor.openRow=-1;editor.showSource=true;if(liffReady)liff.logout();loginScreen('Đã đăng xuất.');}break;
       case 'more':
         try{loading(true);const data=await api('jobs?filter='+state.filter+'&offset='+(state.jobs.length));const seen=new Set(state.jobs.map(j=>j.id));state.jobs.push(...data.jobs.filter(j=>!seen.has(j.id)));state.more=data.more;render();}catch(e){error(e.message);}finally{loading(false);}break;
     }
