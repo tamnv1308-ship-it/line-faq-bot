@@ -45,6 +45,20 @@ class ReplyTests(unittest.TestCase):
         self.notify();self.assertIn('MWG lỗi nhập file',self.pushes[0][1])
         self.assertEqual(len(self.replies),1)
 
+    def test_late_result_push_has_its_own_deduplication_key(self):
+        job=self.q.draft('late','owner','chat',dict(source='1',destination='2',product='0131491005415',quantity=1,note=''))
+        with self.q.db() as db:
+            db.execute("UPDATE jobs SET state='submitting',lease='lease' WHERE id=?",(job['id'],))
+        unknown=json.dumps([dict(co='',error='Waiting',state='unknown')])
+        final=json.dumps([dict(co='1CO123',error='',state='succeeded')])
+        self.assertTrue(self.q.update(job['id'],'lease','unknown',unknown))
+        self.notify();self.assertEqual(len(self.pushes),1)
+        self.assertTrue(self.q.update(job['id'],'lease','succeeded',final))
+        self.notify();self.notify()
+        self.assertEqual(len(self.pushes),2)
+        self.assertNotEqual(self.pushes[0][2],self.pushes[1][2])
+        self.assertIn('1CO123',self.pushes[1][1])
+
     def test_only_actual_preview_replied_and_no_creation(self):
         event=self.event();self.assertTrue(self.handle(event));self.assertEqual(self.replies,[])
         self.handle(event) # webhook redelivery must not consume reply/create duplicate

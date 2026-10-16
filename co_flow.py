@@ -36,7 +36,7 @@ CANCEL_QUIPS = (
 )
 HONORS_VERSION = 2
 RESULT_RECOVERY_VERSION = 1
-LATE_RESULT_VERSION = 1
+LATE_RESULT_VERSION = 2
 
 def draft_expired(job, now):
     limit = PREVIEW_DELIVERY_SECONDS if job['result']=='MWG_PREVIEW' and not job['notified'] else CONFIRM_SECONDS
@@ -838,7 +838,10 @@ def install(app, reply, push, default_users=(), requester_name=None):
                 continue
             next_notice[key]=time.monotonic()+60
             import uuid
-            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-result:'+job['id']+(':preview' if job['state']=='draft' else '')))
+            suffix=':preview' if job['state']=='draft' else ''
+            if json.loads(job['payload']).get('late_reconciliation'):
+                suffix=':reconciled:'+job['state']
+            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL,'co-result:'+job['id']+suffix))
             try:
                 if push(job['chat'],text,retry_key):
                     queue.mark_notified(job['id'],job['state'])
