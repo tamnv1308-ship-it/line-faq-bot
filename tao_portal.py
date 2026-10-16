@@ -25,7 +25,7 @@ from co_conditions import load_conditions, fold, condition_text
 from co_summary import aggregate, period, TZ
 from co_summary_view import details as summary_details
 
-VERSION = 2
+VERSION = 3
 COOKIE = '__Host-tao_session'
 SESSION_SECONDS = 900
 ROOT = Path(__file__).resolve().parent
@@ -41,6 +41,26 @@ LABELS = {'draft':'Chờ xác nhận', 'preview_queued':'Chờ nhập file', 'pr
 class PortalError(Exception):
     def __init__(self, message, status=400):
         self.message, self.status = message, status
+
+
+def unknown_revision(job):
+    fields=('id','owner','chat','state','payload','result','lease','created','updated','notified')
+    return hashlib.sha256(json.dumps({k:job[k] for k in fields},sort_keys=True,
+                                    separators=(',',':')).encode()).hexdigest()
+
+
+def unknown_cancel_reason(job):
+    if job['state']!='unknown':return 'Yêu cầu không còn ở trạng thái chưa rõ kết quả.'
+    payload=json.loads(job['payload']);result=job['result'] or ''
+    evidence=result+' '+json.dumps(payload.get('late_reconciliation',{}),ensure_ascii=False)
+    if re.search(r'[0-9A-Z]+CO[0-9]+',evidence,re.I):
+        return 'Đã có dấu vết mã CO. Không thể hủy toàn bộ yêu cầu này.'
+    if result.lstrip().startswith(('[','{')):
+        try:
+            if any(row['co'] or row.get('state')=='succeeded' for row in decode_results(payload,result)):
+                return 'Có dòng đã có CO. Không thể hủy toàn bộ yêu cầu này.'
+        except (ValueError,TypeError):return 'Dữ liệu kết quả không đầy đủ; cần kiểm tra trước khi hủy.'
+    return ''
 
 
 def settings():
@@ -199,6 +219,12 @@ def install(app, reply, default_users=()):
         if details:
             result['skipped_duplicates']=payload.get('skipped_duplicates',[])
             result['skipped_errors']=payload.get('skipped_errors',[])
+            if user['uid']==PRIVATE_CO_OWNER and job['state']=='unknown':
+                reason=unknown_cancel_reason(job)
+                result['unknown_resolution']={'revision':unknown_revision(job),'can_cancel':not reason,'reason':reason}
+            audit=payload.get('owner_no_co_cancellation')
+            if isinstance(audit,dict) and audit.get('actor')==PRIVATE_CO_OWNER:
+                result['owner_cancelled_at']=audit['cancelled_at']
         return result
 
     @bp.before_request
@@ -387,6 +413,36 @@ def install(app, reply, default_users=()):
         message=(f'Đã hủy {len(rows)} yêu cầu chờ của tất cả người dùng, trong mọi chat. '
                  'Yêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo được giữ nguyên.')
         return jsonify(cancelled=len(rows),message=message)
+
+    @bp.post('/api/admin/jobs/<jid>/cancel-unknown')
+    def cancel_unknown(jid):
+        user=identity(True);require_owner(user);rate(('cancel-unknown',user['uid']),10)
+        if not re.fullmatch(r'[a-f0-9]{10}',jid):raise PortalError('Mã yêu cầu không hợp lệ.',404)
+        data=body();revision=data.get('revision')
+        if data.get('checked_mwg_no_co') is not True:
+            raise PortalError('Cần xác nhận đã kiểm tra MWG và chưa có CO ở tất cả dòng của yêu cầu.')
+        if not isinstance(revision,str) or not re.fullmatch(r'[0-9a-f]{64}',revision):
+            raise PortalError('Hãy mở lại chi tiết yêu cầu trước khi hủy.')
+        with q.db() as db:
+            row=db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
+            if not row:raise PortalError('Không tìm thấy yêu cầu.',404)
+            job=dict(row)
+            if not hmac.compare_digest(revision,unknown_revision(job)):
+                raise PortalError('Kết quả đã thay đổi. Tải lại và kiểm tra MWG trước khi hủy.',409)
+            reason=unknown_cancel_reason(job)
+            if reason:raise PortalError(reason,409)
+            if db.execute('SELECT 1 FROM co_note_outbox WHERE job_id=?',(jid,)).fetchone():
+                raise PortalError('Đã có kết quả CO được ghi nhận. Không thể hủy yêu cầu này.',409)
+            now=time.time();payload=json.loads(job['payload'])
+            payload['owner_no_co_cancellation']={'actor':user['uid'],'cancelled_at':now,
+                'checked_mwg_no_co':True,'previous_state':job['state'],'previous_result':job['result'],
+                'revision':revision}
+            # Keep the lease only for authenticated late result reconciliation, never for a new claim.
+            db.execute("UPDATE jobs SET state='cancelled',payload=?,notified=1,updated=? WHERE id=?",
+                       (json.dumps(payload,ensure_ascii=False),now,jid))
+            db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+        return jsonify(message=f'Đã hủy yêu cầu #{jid} theo xác nhận của Tâm: đã kiểm tra MWG, chưa có CO. Đã lưu lịch sử đối soát.',
+                       job=public_job(get_job(jid,user),user,True),server_time=time.time())
 
     @bp.get('/api/admin/locks')
     def locks():

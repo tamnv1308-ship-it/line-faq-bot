@@ -149,6 +149,145 @@ class PortalTests(unittest.TestCase):
         jid=self.job(state='queued');self.call('jobs/'+jid+'/cancel','POST',{})
         self.assertEqual(self.state(jid),'cancelled')
 
+    def unknown_job(self,result='MWG chưa trả kết quả.',payload=None):
+        jid=self.job(state='unknown',payload=payload)
+        with self.q.db() as db:
+            db.execute('UPDATE jobs SET result=?,lease=? WHERE id=?',(result,'unknown-lease',jid))
+        return jid
+
+    def unknown_review(self,jid):
+        return {'revision':self.call('jobs/'+jid).json['job']['unknown_resolution']['revision'],
+                'checked_mwg_no_co':True}
+
+    def test_unknown_cancel_only_owner_not_member_or_admin(self):
+        jid=self.unknown_job();path='admin/jobs/'+jid+'/cancel-unknown'
+        self.assertEqual(self.call(path,'POST',{}).status_code,401)
+        for user in (MEMBER,ADMIN):
+            self.login(user)
+            self.assertEqual(self.call(path,'POST',{'checked_mwg_no_co':True,'revision':'0'*64}).status_code,403)
+        self.login(MEMBER)
+        self.assertNotIn('unknown_resolution',self.call('jobs/'+jid).json['job'])
+        self.login(OWNER)
+        self.assertTrue(self.call('jobs/'+jid).json['job']['unknown_resolution']['can_cancel'])
+        self.assertEqual(self.state(jid),'unknown')
+
+    def test_unknown_cancel_requires_explicit_attestation_and_csrf(self):
+        jid=self.unknown_job();self.login(OWNER);data=self.unknown_review(jid)
+        path='admin/jobs/'+jid+'/cancel-unknown'
+        for value in (None,False,'true',1):
+            self.assertEqual(self.call(path,'POST',dict(data,checked_mwg_no_co=value)).status_code,400)
+        for value in (None,3,'bad'):
+            self.assertEqual(self.call(path,'POST',dict(data,revision=value)).status_code,400)
+        for headers in ({'Origin':'https://evil.example'},{'X-Tao-CSRF':''}):
+            self.assertEqual(self.call(path,'POST',data,headers).status_code,403)
+        self.assertEqual(self.state(jid),'unknown')
+
+    def test_unknown_cancel_preserves_evidence_and_releases_queue(self):
+        jid=self.unknown_job();next_id=self.job(state='preview_queued');self.login(OWNER)
+        data=self.unknown_review(jid)
+        with self.q.db() as db:before=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+        response=self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data)
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['job']['state'],'cancelled')
+        self.assertIn('owner_cancelled_at',response.json['job'])
+        with self.q.db() as db:
+            after=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+            for field in ('result','created','owner','chat','lease'):self.assertEqual(after[field],before[field])
+            payload=json.loads(after['payload']);audit=payload.pop('owner_no_co_cancellation')
+            self.assertEqual(payload,json.loads(before['payload']))
+            self.assertEqual(audit['actor'],OWNER);self.assertIs(audit['checked_mwg_no_co'],True)
+            self.assertEqual(audit['previous_result'],before['result']);self.assertEqual(audit['revision'],data['revision'])
+            self.assertEqual(after['notified'],1)
+        self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
+        self.assertEqual(self.q.claim(preview_protocol=True,batch_protocol=True)['id'],next_id)
+        self.assertEqual(self.state(jid),'cancelled')
+
+    def test_unknown_cancel_refuses_stale_result_payload_or_lease(self):
+        self.login(OWNER)
+        changes=(('state','succeeded'),('result','Late MWG response'),('lease','new-lease'),
+                 ('updated',time.time()+10),('payload',json.dumps(dict(self.payload,quantity=2))))
+        for key,value in changes:
+            jid=self.unknown_job();data=self.unknown_review(jid)
+            with self.q.db() as db:db.execute('UPDATE jobs SET '+key+'=? WHERE id=?',(value,jid))
+            response=self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data)
+            self.assertEqual(response.status_code,409,(key,response.json))
+            self.assertNotEqual(self.state(jid),'cancelled')
+
+    def test_unknown_cancel_rejects_other_states_even_with_valid_revision(self):
+        self.login(OWNER)
+        for state in ('draft','queued','preview_running','running','submitting','succeeded','failed','cancelled','expired'):
+            jid=self.job(state=state)
+            with self.q.db() as db:job=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+            data={'revision':portal.unknown_revision(job),'checked_mwg_no_co':True}
+            self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
+            self.assertEqual(self.state(jid),state)
+
+    def test_unknown_cancel_rejects_partial_co_legacy_co_and_bad_evidence(self):
+        self.login(OWNER)
+        batch=dict(items=[self.payload,dict(self.payload,source='789')])
+        cases=[('Đã có 123CO456 nhưng MWG trả lỗi',None),('[broken',None),
+               (json.dumps([dict(co='1CO123',error='',state='succeeded'),dict(co='',error='Waiting',state='unknown')]),batch)]
+        for result,payload in cases:
+            jid=self.unknown_job(result,payload);job=self.call('jobs/'+jid).json['job']
+            self.assertFalse(job['unknown_resolution']['can_cancel'])
+            data={'revision':job['unknown_resolution']['revision'],'checked_mwg_no_co':True}
+            self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
+            self.assertEqual(self.state(jid),'unknown')
+
+    def test_unknown_cancel_checks_saved_co_note_evidence(self):
+        jid=self.unknown_job();self.login(OWNER);data=self.unknown_review(jid)
+        with self.q.db() as db:
+            db.execute('INSERT INTO co_note_outbox(job_id,destination,message) VALUES(?,?,?)',(jid,GROUP,'1CO123'))
+        self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
+        self.assertEqual(self.state(jid),'unknown')
+
+    def test_unknown_cancel_acknowledges_exact_retry_and_verified_failure(self):
+        result=json.dumps([dict(co='',error='Waiting',state='unknown')])
+        jid=self.unknown_job(result);self.login(OWNER)
+        self.call('admin/jobs/'+jid+'/cancel-unknown','POST',self.unknown_review(jid))
+        self.assertTrue(self.q.update(jid,'unknown-lease','unknown',result))
+        failed=json.dumps([dict(co='',error='Không đủ tồn',state='failed')])
+        self.assertTrue(self.q.update(jid,'unknown-lease','failed',failed))
+        self.assertTrue(self.q.update(jid,'unknown-lease','failed',failed))
+        self.assertEqual(self.state(jid),'cancelled')
+        self.assertEqual(self.q.result_status(jid,'unknown-lease')['result'],result)
+        with self.q.db() as db:
+            payload=json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(jid,)).fetchone()['payload'])
+            self.assertEqual(payload['owner_no_co_cancellation']['verified_failure'],failed)
+
+    def test_unknown_cancel_does_not_hide_late_success(self):
+        jid=self.unknown_job();self.login(OWNER)
+        self.call('admin/jobs/'+jid+'/cancel-unknown','POST',self.unknown_review(jid))
+        final=json.dumps([dict(co='1CO987654',error='',state='succeeded')])
+        self.assertTrue(self.q.update(jid,'unknown-lease','succeeded',final))
+        self.assertTrue(self.q.update(jid,'unknown-lease','succeeded',final))
+        with self.q.db() as db:
+            job=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+            self.assertEqual(job['state'],'succeeded');self.assertEqual(job['result'],final);self.assertEqual(job['notified'],0)
+            self.assertIn('owner_no_co_cancellation',json.loads(job['payload']))
+            self.assertIn('1CO987654',db.execute('SELECT message FROM co_note_outbox WHERE job_id=?',(jid,)).fetchone()['message'])
+
+    def test_unknown_cancel_never_acknowledges_submit_or_wrong_lease(self):
+        jid=self.unknown_job();self.login(OWNER)
+        self.call('admin/jobs/'+jid+'/cancel-unknown','POST',self.unknown_review(jid))
+        self.assertFalse(self.q.update(jid,'unknown-lease','submitting',''))
+        self.assertFalse(self.q.update(jid,'wrong-lease','unknown','MWG chưa trả kết quả.'))
+        self.assertFalse(self.q.update(jid,'unknown-lease','preview_ready','Product'))
+        self.assertFalse(self.q.update(jid,'unknown-lease','succeeded',json.dumps([dict(co='1CO123',error='')])) )
+        self.assertEqual(self.state(jid),'cancelled')
+
+    def test_unknown_cancel_late_result_preserves_already_failed_rows(self):
+        payload=dict(items=[self.payload,dict(self.payload,source='789')])
+        failed=dict(co='',error='Không đủ tồn',state='failed')
+        original=json.dumps([failed,dict(co='',error='Waiting',state='unknown')])
+        jid=self.unknown_job(original,payload);self.login(OWNER)
+        response=self.call('admin/jobs/'+jid+'/cancel-unknown','POST',self.unknown_review(jid))
+        self.assertEqual(response.status_code,200,response.json)
+        co=dict(co='1CO123',error='',state='succeeded')
+        self.assertFalse(self.q.update(jid,'unknown-lease','succeeded',json.dumps([co,co])))
+        self.assertTrue(self.q.update(jid,'unknown-lease','succeeded',json.dumps([failed,co])))
+        self.assertEqual(self.state(jid),'succeeded')
+
     def test_bulk_cancel_only_owner_even_for_other_admins(self):
         jid=self.job(state='queued')
         self.assertEqual(self.call('admin/cancel-waiting','POST',{}).status_code,401)

@@ -547,6 +547,16 @@ class Queue:
                 return False
             if job['state'] == state and (job['result'] or '') == result:
                 return True
+            payload=json.loads(job['payload'])
+            cancellation=payload.get('owner_no_co_cancellation',{})
+            owner_cancelled=(job['state']=='cancelled' and isinstance(cancellation,dict)
+                and cancellation.get('actor')==PRIVATE_CO_OWNER
+                and cancellation.get('checked_mwg_no_co') is True
+                and cancellation.get('previous_state')=='unknown')
+            if owner_cancelled and ((state=='unknown' and result==(job['result'] or ''))
+                    or (state=='failed' and cancellation.get('verified_failure')==result)):
+                # The exact durable result is already retained. Do not block Mac on its retry.
+                return True
             if state=='preview_ready' and job['state'] in {'draft','preview_running'}:
                 payload=json.loads(job['payload'])
                 receipt=hashlib.sha256(result.encode()).hexdigest()
@@ -586,11 +596,14 @@ class Queue:
                 except (ValueError,TypeError):
                     return False
             allowed = {'preview_running':{'failed'},'running': {'submitting','failed','unknown'}, 'submitting': {'succeeded','failed','unknown'}}
-            late=job['state']=='unknown' and state in {'succeeded','failed'} and result.startswith('[')
+            late=(job['state']=='unknown' or owner_cancelled) and state in {'succeeded','failed'} and result.startswith('[')
             if late:
                 try:
-                    payload=json.loads(job['payload'])
-                    old_rows=decode_results(payload,job['result'])
+                    if owner_cancelled:
+                        try:old_rows=decode_results(payload,job['result'] or '')
+                        except (ValueError,TypeError):
+                            old_rows=[dict(co='',error='',state='unknown') for _ in items(payload)]
+                    else:old_rows=decode_results(payload,job['result'])
                     if any(row.get('state') not in {'succeeded','failed'} for row in rows):return False
                     for old,new in zip(old_rows,rows):
                         if old['co'] and old['co']!=new['co']:return False
@@ -598,6 +611,13 @@ class Queue:
                         if old.get('state') in {'succeeded','failed'} and old!=new:return False
                     if state!=('succeeded' if any(row['co'] for row in rows) else 'failed'):return False
                 except (ValueError,TypeError,KeyError):return False
+                if owner_cancelled and state=='failed':
+                    cancellation['verified_failure']=result
+                    cancellation['verified_at']=time.time()
+                    db.execute('UPDATE jobs SET payload=? WHERE id=?',(json.dumps(payload,ensure_ascii=False),jid))
+                    return True
+                # A genuinely late CO must be visible even after the owner's no-CO check.
+                # Never acknowledge a delayed submitting barrier on a cancelled request.
                 payload['late_reconciliation']={'previous_result':job['result'],'received_at':time.time()}
                 db.execute('UPDATE jobs SET payload=? WHERE id=?',(json.dumps(payload,ensure_ascii=False),jid))
             elif state not in allowed.get(job['state'], set()):

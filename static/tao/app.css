@@ -130,3 +130,5 @@
 #tao-app .tao-phone .tao-queue-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0;text-align:center}#tao-app .tao-phone .tao-queue-counts span{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--tao-muted)}#tao-app .tao-phone .tao-queue-counts b{font-size:22px;color:var(--tao-ink)}#tao-app .tao-phone .tao-cancel-all{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;color:var(--tao-red);margin-top:14px}#tao-app .tao-phone .tao-cancel-all svg{width:18px;height:18px}#tao-app .tao-phone .tao-cancel-all:disabled{opacity:.45;cursor:default}#tao-app .tao-phone .tao-queue-filters{flex-wrap:wrap}#tao-app .tao-phone .tao-queue-filters button{flex:1 1 auto}
 
 #tao-app .tao-phone .tao-inline-actions .tao-cancel-all{margin-top:0}
+
+#tao-app .tao-phone .tao-attestation{display:flex;align-items:flex-start;gap:12px;font-size:14px;line-height:1.6;margin:18px 0;padding:14px;border:1px solid var(--tao-line);border-radius:12px;background:var(--tao-soft)}#tao-app .tao-phone .tao-attestation input{flex-shrink:0;width:22px;height:22px;accent-color:var(--tao-green);margin:1px 0 0}
