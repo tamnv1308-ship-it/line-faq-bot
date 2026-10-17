@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import time
 import co_observability as observe
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from transfer_parser import parse_form, parse_request, is_transfer_message, COPIED_TEXT_VERSION
@@ -20,6 +20,8 @@ from co_store_directory import write as update_store_directory, status as store_
 from co_conditions import condition_text, load_conditions
 from confirmation_locks import expire_drafts, lock_notice, unlock, POLICY_VERSION as CONFIRM_LOCK_VERSION
 from co_health import readiness, validate_health, READINESS_VERSION
+import co_forward
+from co_forward import is_forward_command
 
 CONFIRM_SECONDS = 60
 PREVIEW_DELIVERY_SECONDS = 300
@@ -182,6 +184,7 @@ class Queue:
               INSERT INTO co_worker_health(id,state,progress_at) VALUES(1,'unverified',0) ON CONFLICT(id) DO NOTHING;
             ''')
             observe.schema(db)
+            co_forward.schema(db)
 
     @contextmanager
     def db(self):
@@ -309,12 +312,13 @@ class Queue:
             return (f"Mac: {'online' if online else 'offline'}\nBOT: {health['worker_label']}\nNhận CO: {intake}\n"
                     f"ADM tạm dừng: {'không' if row['enabled'] else 'có'}\nĐang chờ: {waiting}\nĐang xử lý: {active}\nChưa rõ kết quả: {counts.get('unknown',0)}")
 
-    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0, request_fingerprint=None):
+    def draft(self, event, owner, chat, payload, check_product=False, reply_token=None, require_online=False, check_duplicates=False, gather_seconds=0, request_fingerprint=None, _db=None):
         check_destinations(payload)
         if gather_seconds not in (0,GATHER_SECONDS):
             raise ValueError('Thời gian gom yêu cầu chỉ hỗ trợ 0 hoặc 10 giây.')
-        self.expire_confirmations()
-        with self.db() as db:
+        if _db is None:self.expire_confirmations()
+        else:expire_drafts(_db,time.time(),PRIVATE_CO_OWNER)
+        with (self.db() if _db is None else nullcontext(_db)) as db:
             now = time.time()
             old = db.execute('SELECT * FROM jobs WHERE event=?', (event,)).fetchone()
             if not old:
@@ -772,6 +776,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             raise RuntimeError('CO cần DB bền vững và worker token ít nhất 32 ký tự.')
         queue = Queue(path)
     users = set(filter(None,(x.strip() for x in os.getenv('CO_ALLOWED_USER_IDS','').split(',')))) or set(default_users)
+    handle_forward=co_forward.install(queue,PRIVATE_CO_OWNER,add_requester_note,reply,requester_name,MAX_BATCH_ROWS)
 
     def authenticated():
         if not queue:
@@ -842,7 +847,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
                        late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3,
                        owner_only_off_version=1, intake_mode='normal' if control['enabled'] else 'owner_only',
-                       owner_accepting=health['mwg_ready'],observability_version=observe.VERSION)
+                       owner_accepting=health['mwg_ready'],observability_version=observe.VERSION,
+                       forward_draft_version=co_forward.VERSION)
 
     @app.post('/co/worker/conditions/reload')
     def conditions_reload():
@@ -935,6 +941,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             break
 
     def handle(event):
+        if handle_forward(event):return True
         text=event.message.text.strip()
         if is_unlock(text):
             owner=getattr(event.source,'user_id',None)

@@ -140,6 +140,11 @@ def preview_details(payload,result):
 
 def line_text_messages(text):
     messages=[{'type':'text','text':part} for part in message_chunks(text)]
+    from co_forward import ReplyText
+    if isinstance(text,ReplyText) and text.quick_actions:
+        messages[-1]['quickReply']={'items':[{'type':'action','action':{'type':'message','label':label,'text':command}}
+            for label,command in text.quick_actions]}
+        return messages
     match=re.match(r'^Xác nhận tạo CO — ([0-9a-f]{10})\b',text,re.IGNORECASE)
     if not match and text.startswith('🏅 ') and '\nMời ' in text:
         match=re.search(r'(?m)^XACNHAN ([0-9a-f]{10})\nHUY \1\n\n(?:⏳ )?Hiệu lực: (?:1|5) phút$',text)

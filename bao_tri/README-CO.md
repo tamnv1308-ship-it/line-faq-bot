@@ -122,3 +122,18 @@ Nhật ký `co_ops_events` ghi mốc tiếp nhận, lấy dữ liệu MWG, đưa
 Worker ghi từng thao tác bằng đồng hồ monotonic vào `.co-mac/telemetry-pending.json` (quyền 0600), gửi cùng heartbeat/kết quả, loại trùng theo ID và kiểm tra lease tại máy chủ. Không ghi token, note, nội dung tin nhắn hay exception gốc vào nhật ký sự kiện. Spool cục bộ tối đa 1.000 sự kiện, chỉ giữ trong 30 ngày; mất dữ liệu đo không được cản trở lưu kết quả CO. Máy chủ dọn nhật ký theo lịch giữ lịch sử 30 ngày hiện có. Chi tiết từng thao tác có thể đến trễ vài giây hoặc thiếu khi worker cũ/chưa kết nối.
 
 Triển khai máy chủ trước, sau đó nạp lại worker khi không có yêu cầu đang xử lý/chờ xác nhận hay kết quả đang chờ gửi. Không thay đổi quyền, thời hạn Xác nhận 60 giây, kiểm tra trùng, quy tắc hủy kết quả chưa rõ, tự tải lại trang hoặc chế độ Bật/Tắt.
+
+## Gom tin chuyển tiếp riêng cho Tâm
+
+Chỉ User ID chủ bot `U60751d1a57eb4707a3dff9c06f3240a4` dùng trong tin nhắn riêng với bot. ADM khác và nhóm chat không được mở, xem, sửa hoặc gửi giỏ này.
+
+1. Gửi `!gom` để bật. Sau đó chuyển tiếp hoặc dán từng tin văn bản vào chat riêng.
+2. Bot lưu từng tin trong giỏ nháp, giữ Note riêng. Chưa đưa vào hàng chờ, chưa nhập MWG, chưa tạo CO. Bản nháp lưu bền vững khi máy chủ khởi động lại.
+3. Bấm **Xem nháp**, **Sửa tin** (chọn số rồi gửi lại toàn bộ tin cần sửa), hoặc **Bỏ tin**. `!gom xem` luôn mở lại các nút nếu LINE đã ẩn chúng.
+4. Bấm **Gửi yêu cầu** ở bản nháp mới nhất. Giữ giới hạn 7 dòng/file, cùng trạng thái; lỗi được chỉ rõ để sửa/bỏ trước khi gửi. Mã sản phẩm đủ 13 số; kiểm tra shop bị chặn, Note, trùng lệnh, lệnh chưa rõ kết quả, trạng thái Mac và quyền vẫn qua luồng hiện có. Người yêu cầu là Tâm, không tự suy đoán người gửi tin gốc.
+5. Bot lấy dữ liệu MWG rồi gửi thông tin **Xác nhận / Hủy** như trước. Hiệu lực 1 phút bắt đầu sau khi gửi thông tin xác nhận thành công. Nút **Gửi yêu cầu** chỉ nhập bước kiểm tra, không tự xác nhận hay tạo CO.
+6. Sau khi gửi, chế độ gom vẫn bật: tin tiếp theo bắt đầu giỏ mới. `!gom tat` hoặc **Hủy nháp** hủy nội dung chưa gửi và tắt gom; không hủy yêu cầu đã gửi/CO đã có. Khi tắt gom, tin CO mới tiếp tục theo cách cũ.
+
+Gom nháp được phép khi Mac offline; gửi chỉ thành công khi Mac sẵn sàng. BOT OFF vẫn cho riêng Tâm gửi theo quyền cũ. Gửi lỗi giữ nguyên nháp. Tin webhook lặp và bấm gửi lặp không tạo thêm job; nút cũ không sửa/gửi bản nháp mới. Nội dung nháp hết 30 ngày được xóa theo lịch dọn lịch sử, giữ chế độ tạm dừng để không vô tình chuyển tin mới sang tạo CO trực tiếp.
+
+Phạm vi hiện tại là tin văn bản; không đọc nội dung ảnh hoặc file được chuyển tiếp. Lệnh CO/quản trị hiện tại tiếp tục hoạt động khi bật gom.

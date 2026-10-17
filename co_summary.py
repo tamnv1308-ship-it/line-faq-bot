@@ -66,6 +66,8 @@ def cleanup(queue,directory):
     image_cutoff=period('7ngay')[0].timestamp()
     cutoff=(datetime.now(TZ).replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=29)).timestamp()
     with queue.db() as db:
+        from co_forward import cleanup as cleanup_forward_drafts
+        cleanup_forward_drafts(db,cutoff)
         db.execute('DELETE FROM co_ops_events WHERE received<?',(cutoff,))
         ids=[r['id'] for r in db.execute("SELECT id FROM jobs WHERE state IN ('succeeded','failed','cancelled','expired') AND created<? AND updated<?",(cutoff,cutoff))]
         for jid in ids:
