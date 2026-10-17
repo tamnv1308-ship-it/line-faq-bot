@@ -65,6 +65,8 @@ def schema(db):
       CREATE TABLE IF NOT EXISTS co_telegram_deliveries (
         delivery_key TEXT PRIMARY KEY, state TEXT NOT NULL, retry_at REAL NOT NULL,
         message_id TEXT NOT NULL, updated REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS co_telegram_identities (
+        telegram_user TEXT PRIMARY KEY, owner_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS co_telegram_seen_groups (
         bot_id TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL,
         seen REAL NOT NULL, PRIMARY KEY(bot_id,chat_id));
@@ -282,15 +284,24 @@ class Bridge:
                 except ValueError as error:answer=str(error)
                 self.reply(token,answer);return
             elif command.lower() in ('start','help','congcu'):
-                self.reply(token,'Công cụ Táo · Telegram\nLiên kết tài khoản tại LIFF → Kết nối Telegram.\n'
+                self.reply(token,'Công cụ Táo · Telegram\nThành viên nhóm CO dùng ngay, không cần liên kết LIFF.\n'
                     '/taoco + nội dung form — gửi yêu cầu\n/xacnhan <mã> · /huy <mã>\n/co <mã CO> · /gom · /tongket\n'
                     'https://liff.line.me/'+os.getenv('TAO_LIFF_ID','2012056807-Wv492OLR'));return
         link=self.linked(telegram_user=sender['id'])
-        if not link:
-            self.reply(token,'Chưa liên kết tài khoản. Mở Công cụ Táo (LIFF) → Kết nối Telegram, rồi xác nhận đúng tài khoản của bạn.');return
-        source=SimpleNamespace(user_id=link['line_user'],group_id='tg:'+str(cid) if kind!='private' else None,room_id=None)
+        if not link and (kind=='private' or str(cid)!=cfg['group']):
+            self.reply(token,'Bot chỉ nhận yêu cầu của thành viên trong nhóm CO được phép. Tin nhắn riêng dành cho Tâm.');return
+        # Pin the canonical identity so linking LIFF later cannot reset locks,
+        # lose ownership of pending requests, or bypass duplicate protection.
+        tid=str(sender['id'])
+        with self.queue.db() as db:
+            db.execute('INSERT INTO co_telegram_identities(telegram_user,owner_id) VALUES(?,?) '
+                       'ON CONFLICT(telegram_user) DO NOTHING',
+                       (tid,link['line_user'] if link else 'telegram:'+tid))
+            identity=db.execute('SELECT owner_id FROM co_telegram_identities WHERE telegram_user=?',(tid,)).fetchone()['owner_id']
+        name=(link['display_name'] if link else ' '.join(str(sender.get(k,'')).strip() for k in ('first_name','last_name')).strip())
+        source=SimpleNamespace(user_id=identity,group_id='tg:'+str(cid) if kind!='private' else None,room_id=None)
         event=SimpleNamespace(source=source,delivery_chat='tg:'+str(cid),platform='telegram',
-            requester_name=link['display_name'],message=SimpleNamespace(text=text,id=str(message.get('message_id',0))),
+            requester_name=(name or 'Telegram '+tid)[:200],message=SimpleNamespace(text=text,id=str(message.get('message_id',0))),
             webhook_event_id='telegram:'+cfg['bot_id']+':'+str(update['update_id']),reply_token=token,
             timestamp=int((stamp if not callback else time.time())*1000))
         for handler in handlers:

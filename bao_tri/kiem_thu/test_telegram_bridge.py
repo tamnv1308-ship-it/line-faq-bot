@@ -132,6 +132,51 @@ class TelegramTests(unittest.TestCase):
         with self.q.db() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) n FROM co_telegram_seen_groups').fetchone()['n'],0)
 
+    def test_unlinked_members_self_only_and_owner_override(self):
+        self.send('/taoco '+form(),uid=99);job=self.preview()
+        self.assertEqual(self.jobs()[0]['owner'],'telegram:99')
+        for uid in (98,2,4):
+            for command in ('XACNHAN ','HUY '):
+                self.send(command+job['id'],uid=uid,callback=True)
+                self.assertEqual(self.jobs()[0]['state'],'draft')
+        self.send('XACNHAN '+job['id'],uid=99,callback=True)
+        self.assertEqual(self.jobs()[0]['state'],'verified_queued')
+        self.send('HUY '+job['id'],uid=1,callback=True)
+        self.assertEqual(self.jobs()[0]['state'],'cancelled')
+
+    def test_native_identity_survives_link_and_self_cancel(self):
+        self.send(form(),uid=99);job=self.preview()
+        self.link('U'+'9'*32,99)
+        self.send('HUY '+job['id'],uid=99,callback=True)
+        self.assertEqual(self.jobs()[0]['state'],'cancelled')
+        self.send(form(2),uid=99)
+        self.assertEqual(self.jobs()[-1]['owner'],'telegram:99')
+
+    def test_unlinked_group_gate_off_and_no_admin_by_name(self):
+        self.send(form(),uid=99,group=None)
+        self.send(form(),uid=99,group=-999)
+        anonymous=self.update(form(),uid=99)
+        anonymous['message']['sender_chat']={'id':-100123}
+        self.bridge.process(anonymous,(self.handle,))
+        self.assertEqual(self.jobs(),[])
+        self.send('/bot off',uid=99)
+        self.send(form(),uid=99)
+        self.assertEqual(len(self.jobs()),1)
+        self.send('/bot off',uid=1,group=None)
+        self.send(form(2),uid=98)
+        self.assertEqual(len(self.jobs()),1)
+        self.send(form(3),uid=1,group=None)
+        self.assertEqual(len(self.jobs()),2)
+
+    def test_unlinked_expiry_lock_survives_later_link(self):
+        self.send(form(),uid=99);job=self.preview()
+        with self.q.db() as db:db.execute('UPDATE jobs SET created=? WHERE id=?',(time.time()-61,job['id']))
+        self.send('XACNHAN '+job['id'],uid=99,callback=True)
+        self.assertEqual(self.jobs()[0]['state'],'expired')
+        self.link('U'+'9'*32,99)
+        self.send(form(2),uid=99)
+        self.assertEqual(len(self.jobs()),1)
+
     def test_preview_buttons_and_other_user_cannot_confirm_or_cancel(self):
         self.send(form(),uid=2);job=self.preview()
         buttons=self.api.calls[-1][1]['reply_markup']['inline_keyboard']

@@ -9,7 +9,7 @@ Bản này thêm kênh Telegram dùng **cùng Queue, Mac worker và dữ liệu 
 3. Thêm bot vào nhóm được chọn; đặt ID nhóm âm vào `TELEGRAM_CO_GROUP_ID`. `TELEGRAM_NOTE_GROUP_ID` tùy chọn, dùng cho `/ketqua` của ADM. Không tự suy đoán nhóm từ tin gửi đến.
 4. Để giữ Privacy Mode, thành viên gửi `/taoco@ten_bot` và nội dung form cùng một tin; hoặc trả lời trực tiếp tin bot. Đừng tắt Privacy Mode hoặc cấp quyền quản trị chỉ để nhận toàn bộ hội thoại. Nếu cần xác minh thành viên từ LIFF bằng `getChatMember`, Telegram chỉ bảo đảm kết quả cho người khác khi bot là quản trị viên; chủ nhóm phải quyết định và cấp các quyền tối thiểu. Không tự thay quyền nhóm.
 5. Trong Render Shell, chạy `python telegram_setup.py` để kiểm tra bot, rồi `python telegram_setup.py --register` để đăng ký webhook vào `/telegram/webhook`. Lệnh không bỏ các tin đang chờ và từ chối ghi đè webhook trỏ sang máy chủ khác. Chỉ báo thành công khi `webhook_matches` là `true`.
-6. Mở LIFF → **Kết nối Telegram** → tạo liên kết → mở Telegram và nhấn Start → quay LIFF, kiểm tra tên/mã Telegram rồi **Xác nhận liên kết**. Liên kết hết hạn sau 5 phút, chỉ dùng một lần. Chủ bot và từng thành viên liên kết chính tài khoản của mình. Không cấp quyền theo username, tên hiển thị, tin chuyển tiếp hay chức vụ quản trị nhóm Telegram.
+6. Mở LIFF → **Kết nối Telegram** → tạo liên kết → mở Telegram và nhấn Start → quay LIFF, kiểm tra tên/mã Telegram rồi **Xác nhận liên kết**. Liên kết hết hạn sau 5 phút, chỉ dùng một lần. Chủ bot liên kết chính tài khoản của mình để giữ quyền. Thành viên trong nhóm CO cấu hình dùng ngay, không cần liên kết LIFF. Không cấp quyền theo username, tên hiển thị, tin chuyển tiếp hay chức vụ quản trị nhóm Telegram.
 7. Kiểm thử tài khoản Tâm, thành viên, ADM; gửi form đến bước xác nhận, kiểm tra Xác nhận/Hủy, hết hạn, bot off, giỏ nháp, kết quả và LIFF. Không bấm Xác nhận tạo CO thật nếu mới kiểm thử bước nhập file.
 8. Khi đã kiểm chứng xong, đặt `CO_INTAKE_TRANSPORT=telegram`. Các yêu cầu **mới** trong chat LINE được hướng sang Telegram; LIFF vẫn đăng nhập LINE và gửi yêu cầu vào Telegram. Yêu cầu LINE cũ giữ chat gốc, vẫn xác nhận/hủy/trả kết quả qua LINE để không thất lạc.
 
@@ -19,7 +19,7 @@ Bản này thêm kênh Telegram dùng **cùng Queue, Mac worker và dữ liệu 
 - ADM vẫn chỉ có quyền hiện có; thành viên nhóm Telegram được chỉ định được gửi yêu cầu và chỉ xác nhận/hủy yêu cầu của mình.
 - Hạn xác nhận 1 phút, khóa do quá hạn, chống trùng, kiểm tra MSP/kho/trạng thái/cụm/vùng, nhập file trước xác nhận, bot off chỉ Tâm được tạo: dùng nguyên mã Queue.
 - Cùng người/cùng chat/cùng trạng thái vẫn được gom theo cấu hình 10 giây đang có.
-- Kết quả và giỏ nháp đồng bộ với LIFF nhờ dùng cùng mã tài khoản LINE và DB.
+- Thành viên chưa liên kết dùng mã Telegram riêng; quyền sở hữu và khóa quá hạn giữ nguyên cả khi liên kết LIFF sau đó. Lịch sử Telegram của các thành viên này chưa gộp vào lịch sử cá nhân LIFF. Tài khoản đã liên kết trước lần sử dụng đầu tiên (bao gồm Tâm) giữ đồng bộ và quyền hiện có.
 
 ## Tin nhắn và phục hồi
 
