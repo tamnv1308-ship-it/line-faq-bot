@@ -266,7 +266,7 @@ class TelegramTests(unittest.TestCase):
         app=Flask('cutover')
         handle,_=install(app,lambda token,text:replies.append(str(text)) or True,lambda *a:True,
                          requester_name=lambda e:e.requester_name)
-        handle(event);self.assertEqual(self.jobs(),[]);self.assertIn('chuyển sang Telegram',replies[-1])
+        handle(event);self.assertEqual(self.jobs(),[]);self.assertEqual('Bot đã ngừng hỗ trợ nhận yêu cầu tạo CO trên LINE.',replies[-1])
         with patch.dict(os.environ,{'CO_INTAKE_TRANSPORT':'line'}):handle(event)
         self.assertEqual(len(self.jobs()),1);self.assertEqual(self.jobs()[0]['chat'],OWNER)
 

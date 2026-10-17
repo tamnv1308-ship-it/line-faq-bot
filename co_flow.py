@@ -947,7 +947,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
         from telegram_bridge import settings as telegram_settings
         if telegram_settings()['active'] and getattr(event,'platform','line')!='telegram':
             if is_transfer_message(event.message.text) or is_forward_command(event.message.text):
-                reply(event.reply_token,'Nhận yêu cầu mới đã chuyển sang Telegram: https://t.me/'+telegram_settings()['username']+'\nCông cụ Táo (LIFF) vẫn dùng bình thường.')
+                reply(event.reply_token,'Bot đã ngừng hỗ trợ nhận yêu cầu tạo CO trên LINE.')
                 return True
         if handle_forward(event):return True
         text=event.message.text.strip()
