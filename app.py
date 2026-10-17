@@ -60,6 +60,8 @@ NOT_FOUND_MESSAGES = [
 
 
 def push_to_group(group_id, text):
+    if telegram_bridge.settings()['active']:
+        return False, 'Kết nối nhắn tin LINE đã ngừng hoạt động.'
     try:
         with ApiClient(configuration) as api_client:
             MessagingApi(api_client).push_message(
@@ -80,6 +82,8 @@ def push_to_group(group_id, text):
 
 
 def push_image_to_group(group_id, image_url):
+    if telegram_bridge.settings()['active']:
+        return False, 'Kết nối nhắn tin LINE đã ngừng hoạt động.'
     try:
         with ApiClient(configuration) as api_client:
             MessagingApi(api_client).push_message(
@@ -103,6 +107,7 @@ def push_image_to_group(group_id, image_url):
 def reply_text(reply_token, text):
     if str(reply_token).startswith('tgr:'):
         return telegram.reply(reply_token,text) if telegram else False
+    if telegram_bridge.settings()['active']:return False
     try:
         with ApiClient(configuration) as api_client:
             MessagingApi(api_client).reply_message(
@@ -294,6 +299,7 @@ for schedule in config.REPORT_SCHEDULES:
 def push_co_result(chat, text, retry_key):
     if telegram_bridge.is_chat(chat):
         return telegram.send(chat,text,retry_key) if telegram else False
+    if telegram_bridge.settings()['active']:return False
     import urllib.request
     import urllib.error
     import json
@@ -317,6 +323,7 @@ handle_co, notify_co = co_flow.install(app, reply_text, push_co_result, config.A
 def reply_summary_image(token,url):
     if str(token).startswith('tgr:'):
         return telegram.reply(token,url,photo=True) if telegram else False
+    if telegram_bridge.settings()['active']:return False
     with ApiClient(configuration) as client:
         MessagingApi(client).reply_message(ReplyMessageRequest(reply_token=token,
             messages=[ImageMessage(original_content_url=url,preview_image_url=url)]))
@@ -335,6 +342,8 @@ def verify_price_note():
 import price_reply
 
 def reply_price_cards(token, messages):
+    if telegram_bridge.settings()['active']:
+        return False
     try:
         with ApiClient(configuration) as client:
             MessagingApi(client).reply_message(ReplyMessageRequest(reply_token=token,
@@ -374,6 +383,8 @@ def report_image(filename):
 
 @app.route("/callback", methods=["POST"])
 def callback():
+    if telegram_bridge.settings()['active']:
+        return "OK"
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
 
