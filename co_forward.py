@@ -124,7 +124,7 @@ class ForwardDrafts:
             entry['error']=''
         self._save(db,draft,payload=json.dumps(entries,ensure_ascii=False),edit_index=-1)
 
-    def submit(self, db, draft, name, reply_token=None):
+    def submit(self, db, draft, name, reply_token=None, chat=None):
         entries,review=self._review(draft)
         if not review or not review['valid'] or any(e.get('error') for e in entries):
             raise ValueError('Sửa hoặc bỏ các dòng lỗi trước khi gửi. Chưa đưa vào hàng chờ.')
@@ -135,7 +135,7 @@ class ForwardDrafts:
         payload['forward_draft']={'id':draft['id'],'messages':len(entries)}
         # In the same queue transaction: append/drop/send cannot race. The
         # fixed submission key and no 10-second merge protect double taps.
-        job=self.queue.draft('forward:'+draft['id'],self.owner,self.owner,payload,
+        job=self.queue.draft('forward:'+draft['id'],self.owner,chat or draft['chat'],payload,
             check_product=True,reply_token=reply_token,require_online=True,
             check_duplicates=True,gather_seconds=0,_db=db)
         if job['state']=='skipped':receipt=job['result']
@@ -236,7 +236,7 @@ class ForwardDrafts:
 
     def _append(self, db, draft, text, stamp):
         if draft['state']=='paused':return self._show(draft)
-        if draft['state']=='sent':draft=self._new(db,self.owner,stamp)
+        if draft['state']=='sent':draft=self._new(db,draft['chat'],stamp)
         if not text or len(text)>10000:raise ValueError('Mỗi tin nháp tối đa 10000 ký tự. Chưa thêm tin này.')
         entry = {'rows':[], 'error':''}
         try:entry['rows']=parse_editable(text)['rows']
@@ -253,7 +253,9 @@ class ForwardDrafts:
     def _command(self, db, draft, bits, stamp, event, name):
         verb=bits[1] if len(bits)>1 else 'bat'
         if verb in ('bat','on') and len(bits)<=2:
-            if not draft or draft['state'] in ('off','sent','paused'):draft=self._new(db,self.owner,stamp)
+            if not draft or draft['state'] in ('off','sent','paused'):
+                from telegram_bridge import event_chat
+                draft=self._new(db,event_chat(event),stamp)
             return self._show(draft,'Đã bật gom nháp. Các tin gửi vào chat này sẽ chưa tạo yêu cầu CO.')
         if verb=='xem' and len(bits)==2:return self._show(draft)
         if verb in ('tat','off') and len(bits)==2:
@@ -290,7 +292,8 @@ class ForwardDrafts:
             if not review or not review['valid'] or any(e.get('error') for e in entries):
                 return self._show(draft,'Sửa hoặc bỏ các tin lỗi trước khi gửi. Chưa đưa vào hàng chờ.')
             if draft['edit_index']>=0:return self._show(draft,'Hoàn tất sửa tin hoặc bấm Thôi sửa trước khi gửi.')
-            job=self.submit(db,draft,name,event.reply_token)
+            from telegram_bridge import event_chat
+            job=self.submit(db,draft,name,event.reply_token,chat=event_chat(event))
             # Reserve this reply token for the normal MWG preview; !gom xem can
             # retrieve the receipt meanwhile, without forcing a paid push.
             return SENT if job['state']!='skipped' else self._show(draft)

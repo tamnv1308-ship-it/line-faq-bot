@@ -763,6 +763,7 @@ class PostgresStatements:
         return self.execute(statement)
 
 def install(app, reply, push, default_users=(), requester_name=None):
+    from telegram_bridge import event_chat, member_groups
     from flask import request, jsonify, abort
     enabled = os.getenv('CO_ENABLED') == '1'
     gather_seconds=int(os.getenv('CO_GATHER_SECONDS',str(GATHER_SECONDS)))
@@ -941,11 +942,18 @@ def install(app, reply, push, default_users=(), requester_name=None):
             break
 
     def handle(event):
+        # During cutover only new LINE forms/forwarded drafts are redirected.
+        # Existing confirmation/cancellation commands remain valid for old jobs.
+        from telegram_bridge import settings as telegram_settings
+        if telegram_settings()['active'] and getattr(event,'platform','line')!='telegram':
+            if is_transfer_message(event.message.text) or is_forward_command(event.message.text):
+                reply(event.reply_token,'Nhận yêu cầu mới đã chuyển sang Telegram: https://t.me/'+telegram_settings()['username']+'\nCông cụ Táo (LIFF) vẫn dùng bình thường.')
+                return True
         if handle_forward(event):return True
         text=event.message.text.strip()
         if is_unlock(text):
             owner=getattr(event.source,'user_id',None)
-            chat=getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None) or owner
+            chat=event_chat(event)
             if owner!=PRIVATE_CO_OWNER:
                 reply(event.reply_token,'Chỉ Tâm 258330 Apple được xem danh sách và mở khóa yêu cầu CO.');return True
             if not queue:
@@ -969,7 +977,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
         if not (adm or is_form or is_command):
             return False
         owner=getattr(event.source,'user_id',None)
-        chat=getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None) or owner
+        chat=event_chat(event)
         if adm:
             if not owner or (owner!=PRIVATE_CO_OWNER and owner not in set(default_users)):
                 reply(event.reply_token,'Lệnh này chỉ dành cho tài khoản ADM đã được cấp quyền.'); return True
@@ -981,7 +989,8 @@ def install(app, reply, push, default_users=(), requester_name=None):
             if not enabled:
                 reply(event.reply_token,'Chức năng CO chưa được cấu hình.'); return True
             if adm=='KETQUA':
-                if chat!=NOTE_GROUP:
+                tg_note=telegram_settings().get('note_group')
+                if chat!=NOTE_GROUP and not (tg_note and chat=='tg:'+tg_note):
                     reply(event.reply_token,'Gửi !ketqua trong nhóm NOTE để lấy kết quả CO.'); return True
                 event_id=getattr(event,'webhook_event_id',None) or 'message:'+event.message.id
                 queue.reply_notes(event_id,lambda text:reply(event.reply_token,text))
@@ -995,7 +1004,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             reply(event.reply_token,'Bot không nhận yêu cầu tạo CO qua tin nhắn riêng của tài khoản này. Vui lòng gửi trong nhóm được phép.'); return True
         if not enabled:
             reply(event.reply_token,'Chức năng tạo CO chưa được cấu hình.'); return True
-        if not owner or (owner!=PRIVATE_CO_OWNER and owner not in users and group_id!=MEMBER_CO_GROUP):
+        if not owner or (owner!=PRIVATE_CO_OWNER and owner not in users and group_id not in ({MEMBER_CO_GROUP}|member_groups())):
             reply(event.reply_token,'Tài khoản chưa được cấp quyền tạo CO.'); return True
         try:
             if is_form:

@@ -31,12 +31,17 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 import config
 import sheets
 import co_flow
+import telegram_bridge
 
 
 app = Flask(__name__)
 
 configuration = Configuration(access_token=config.CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(config.CHANNEL_SECRET)
+
+_co_path = os.getenv('CO_DATABASE_URL') or os.getenv('CO_DB_PATH')
+telegram = telegram_bridge.Bridge(co_flow.Queue(_co_path)) if os.getenv('CO_ENABLED')=='1' and _co_path else None
+telegram_bridge.install_webhook(app, telegram)
 
 REPORT_DIRECTORY = Path("report_images")
 REPORT_DIRECTORY.mkdir(exist_ok=True)
@@ -96,6 +101,8 @@ def push_image_to_group(group_id, image_url):
 
 
 def reply_text(reply_token, text):
+    if str(reply_token).startswith('tgr:'):
+        return telegram.reply(reply_token,text) if telegram else False
     try:
         with ApiClient(configuration) as api_client:
             MessagingApi(api_client).reply_message(
@@ -285,6 +292,8 @@ for schedule in config.REPORT_SCHEDULES:
     )
 
 def push_co_result(chat, text, retry_key):
+    if telegram_bridge.is_chat(chat):
+        return telegram.send(chat,text,retry_key) if telegram else False
     import urllib.request
     import urllib.error
     import json
@@ -302,10 +311,12 @@ def push_co_result(chat, text, retry_key):
         return False
 
 handle_co, notify_co = co_flow.install(app, reply_text, push_co_result, config.ADMIN_USER_IDS,
-    requester_name=lambda event: source_name(
+    requester_name=lambda event: getattr(event,'requester_name',None) or source_name(
         'group_user' if getattr(event.source,'group_id',None) else 'room_user' if getattr(event.source,'room_id',None) else 'user',
         getattr(event.source,'group_id',None) or getattr(event.source,'room_id',None), event.source.user_id))
 def reply_summary_image(token,url):
+    if str(token).startswith('tgr:'):
+        return telegram.reply(token,url,photo=True) if telegram else False
     with ApiClient(configuration) as client:
         MessagingApi(client).reply_message(ReplyMessageRequest(reply_token=token,
             messages=[ImageMessage(original_content_url=url,preview_image_url=url)]))
@@ -339,6 +350,10 @@ import tao_portal
 handle_tao = tao_portal.install(app, reply_text, config.ADMIN_USER_IDS)
 
 scheduler.add_job(notify_co, 'interval', seconds=1, id='co_result_notifications', max_instances=1)
+if telegram:
+    scheduler.add_job(lambda:telegram.drain((handle_summary,handle_co),app.logger),
+                      'interval',seconds=1,id='telegram_updates',max_instances=1)
+    scheduler.add_job(telegram.cleanup,'interval',hours=1,id='telegram_cleanup',max_instances=1)
 scheduler.start()
 
 

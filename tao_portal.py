@@ -21,6 +21,7 @@ from co_flow import (Queue, PRIVATE_CO_OWNER, MEMBER_CO_GROUP, DISABLED_CO_GROUP
                      GATHER_SECONDS, add_requester_note)
 from tao_compose import parse_editable, validate_rows, queue_payload, STATUSES
 from co_forward import ForwardDrafts
+import telegram_bridge
 import co_observability as observe
 from co_health import readiness
 from co_results import items, decode_results
@@ -29,7 +30,7 @@ from co_conditions import load_conditions, fold, condition_text
 from co_summary import aggregate, period, TZ
 from co_summary_view import details as summary_details
 
-VERSION = 5
+VERSION = 6
 COOKIE = '__Host-tao_session'
 SESSION_SECONDS = 900
 ROOT = Path(__file__).resolve().parent
@@ -126,6 +127,7 @@ def install(app, reply, default_users=()):
     bp = Blueprint('tao', __name__, url_prefix='/tao')
     path = os.environ.get('CO_DATABASE_URL') or os.environ.get('CO_DB_PATH')
     q = Queue(path) if os.getenv('CO_ENABLED') == '1' and path else None
+    telegram = telegram_bridge.Bridge(q) if q else None
     forward = ForwardDrafts(q,PRIVATE_CO_OWNER,add_requester_note,MAX_BATCH_ROWS) if q else None
     secret = os.environ.get('CHANNEL_SECRET', '')
     signer = URLSafeTimedSerializer(hashlib.sha256(('tao-session-v1:'+secret).encode()).hexdigest(), salt='tao-v1')
@@ -191,6 +193,13 @@ def install(app, reply, default_users=()):
         if not cancel and chat==DISABLED_CO_GROUP:
             raise PortalError('Nhóm Apple Bot đã ngừng nhận và xác nhận CO.',403)
         if uid==PRIVATE_CO_OWNER:return
+        if telegram_bridge.is_chat(chat):
+            if not chat.startswith('tg:-'):
+                if not cancel:raise PortalError('Chỉ Tâm được xác nhận yêu cầu qua tin nhắn riêng.',403)
+                return
+            try:telegram.verify_member(uid,chat)
+            except ValueError as error:raise PortalError(str(error),403) from None
+            return
         if chat.startswith('U'):
             if not cancel:raise PortalError('Chỉ Tâm được xác nhận yêu cầu qua tin nhắn riêng.',403)
         elif chat!=MEMBER_CO_GROUP and uid not in allowed_users:
@@ -309,7 +318,25 @@ def install(app, reply, default_users=()):
             enabled=bool(db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled'])
         return jsonify(name=user['name'],owner=user['uid']==PRIVATE_CO_OWNER,admin=user['uid'] in admins,
                        csrf=user['csrf'],expires_at=user['exp'],health=health,enabled=enabled,
+                       telegram=telegram.link_status(user['uid']),
                        notice=BOT_OFF_NOTICE if not enabled and user['uid']!=PRIVATE_CO_OWNER else '')
+
+    @bp.post('/api/telegram/link')
+    def telegram_link():
+        user=identity(True);rate(('telegram-link',user['uid']),5)
+        try:url=telegram.begin_link(user['uid'])
+        except ValueError as error:raise PortalError(str(error),409) from None
+        return jsonify(url=url,message='Mở Telegram rồi quay lại đây kiểm tra và xác nhận tài khoản.')
+
+    @bp.post('/api/telegram/confirm')
+    def telegram_confirm():
+        user=identity(True);rate(('telegram-link',user['uid']),5)
+        candidate=body().get('telegram_id')
+        if not isinstance(candidate,str) or not re.fullmatch(r'[1-9][0-9]*',candidate):
+            raise PortalError('Mã tài khoản Telegram không hợp lệ.')
+        try:telegram.confirm_link(user['uid'],candidate)
+        except ValueError as error:raise PortalError(str(error),409) from None
+        return jsonify(message='Đã liên kết Telegram với tài khoản LINE của bạn. Quyền hiện tại được giữ nguyên.')
 
     @bp.get('/api/admin/operations')
     def operations():
@@ -337,7 +364,7 @@ def install(app, reply, default_users=()):
     @bp.get('/api/compose')
     def compose_options():
         user=identity()
-        scopes=[{'value':'group','label':'Nhóm TÁO - CÔNG CỤ HỖ TRỢ'}]
+        scopes=[{'value':'group','label':'Nhóm Telegram được cấp quyền' if telegram_bridge.settings()['active'] else 'Nhóm TÁO - CÔNG CỤ HỖ TRỢ'}]
         if user['uid']==PRIVATE_CO_OWNER:scopes.append({'value':'private','label':'Tin nhắn riêng với bot (Tâm)'} )
         return jsonify(statuses=STATUSES,max_rows=MAX_BATCH_ROWS,scopes=scopes)
 
@@ -387,6 +414,9 @@ def install(app, reply, default_users=()):
         if scope=='group':chat=MEMBER_CO_GROUP
         elif scope=='private' and user['uid']==PRIVATE_CO_OWNER:chat=user['uid']
         else:raise PortalError('Bạn không có quyền gửi yêu cầu vào cuộc chat này.',403)
+        if telegram_bridge.settings()['active']:
+            try:chat=telegram.destination(user['uid'],group=scope=='group')
+            except ValueError as error:raise PortalError(str(error),409) from None
         operation_allowed({'chat':chat},user)
         review=compose_review(data,user)
         if not review['valid']:return jsonify(error='Sửa các ô báo lỗi trước khi gửi.',review=review),400
@@ -433,12 +463,16 @@ def install(app, reply, default_users=()):
     @bp.post('/api/forward-draft/start')
     def forward_start():
         user=identity(True);require_owner(user);data=body()
+        chat=user['uid']
+        if telegram_bridge.settings()['active']:
+            try:chat=telegram.destination(user['uid'])
+            except ValueError as error:raise PortalError(str(error),409) from None
         with q.db() as db:
             draft=forward._read(db)
             if draft:forward_current(db,data,False)
             elif data.get('id') is not None or data.get('revision')!=0:
                 raise PortalError('Tải lại giỏ nháp trước khi bật gom.',409)
-            if not draft or draft['state']!='collecting':draft=forward._new(db,user['uid'],time.time())
+            if not draft or draft['state']!='collecting':draft=forward._new(db,chat,time.time())
             view=forward.snapshot(draft)
         return jsonify(draft=view,message='Đã bật gom nháp. Chuyển tiếp tin văn bản vào chat riêng của bot để thêm vào giỏ.')
 
@@ -470,7 +504,8 @@ def install(app, reply, default_users=()):
                 job,skipped=forward_receipt(db,data.get('id'))
                 if not job and not skipped:
                     draft=forward_current(db,data)
-                    job=forward.submit(db,draft,user['name'])
+                    chat=telegram.destination(user['uid'],db=db) if telegram_bridge.settings()['active'] else None
+                    job=forward.submit(db,draft,user['name'],chat=chat)
                     skipped=job['state']=='skipped'
                 message=(job.get('result') if job and skipped else '')
         except ValueError as error:raise PortalError(str(error),409) from None
