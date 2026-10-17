@@ -43,14 +43,14 @@
     return `<button class="tao-order" data-job="${esc(job.id)}"><div class="tao-order-top"><span>#${esc(job.id)}</span>${badge(job)}</div><div class="tao-route">${esc(row.source)} ${icon('arrow')} ${esc(row.destination)}</div><p class="tao-product">${esc(short(row.product_name)||'Đang lấy tên sản phẩm từ MWG')}</p>${job.rows.length>1?`<p class="tao-subtitle">+ ${job.rows.length-1} dòng khác</p>`:''}<div class="tao-order-foot"><span>${esc(job.requester)} · ${job.rows.length>1?job.rows.length+' dòng':'SL '+row.quantity}</span><b>${job.can_confirm?'Xác nhận':'Chi tiết'} ${icon('right')}</b></div></button>`;
   }
   function navigation(){
-    const active=['detail','compose'].includes(state.page)?'queue':['report','conditions','operations'].includes(state.page)?'home':state.page;
+    const active=['detail','compose','forward'].includes(state.page)?'queue':['report','conditions','operations'].includes(state.page)?'home':state.page;
     nav.innerHTML=[['home','home','Trang chủ'],['queue','layers','Yêu cầu'],['lookup','search','Tra cứu'],...(state.me.admin?[['admin','settings','Quản lý']]:[])].map(([p,i,t])=>`<button data-go="${p}" ${active===p?'aria-current="page"':''}>${icon(i)}${t}</button>`).join('');
     nav.hidden=false;
     nav.classList.toggle('tao-nav-admin',state.me.admin);
   }
   function home(){
     const me=state.me,health=me.health;
-    const tools=[['compose','box','Tạo yêu cầu','Dán tin nhắn · Sửa form'],['lookup','search','Tra cứu CO','Tìm nhanh kết quả'],['queue','layers','Yêu cầu',me.owner?'Quản lý các yêu cầu':'Các yêu cầu của bạn'],['conditions','shield','Điều kiện SP','Kiểm tra từ Sheet DATA'],...(me.owner?[['operations','shield','Cần Tâm xử lý','Sự cố · Thời gian từng bước'],['report','chart','Tổng kết','Hôm nay · 7 · 30 ngày']]:[])];
+    const tools=[['compose','box','Tạo yêu cầu','Dán tin nhắn · Sửa form'],['lookup','search','Tra cứu CO','Tìm nhanh kết quả'],['queue','layers','Yêu cầu',me.owner?'Quản lý các yêu cầu':'Các yêu cầu của bạn'],['conditions','shield','Điều kiện SP','Kiểm tra từ Sheet DATA'],...(me.owner?[['forward','layers','Giỏ nháp của Tâm','Tin gom từ LINE · Sửa từng dòng'],['operations','shield','Cần Tâm xử lý','Sự cố · Thời gian từng bước'],['report','chart','Tổng kết','Hôm nay · 7 · 30 ngày']]:[])];
     return `<div class="tao-greeting"><div><div class="tao-kicker">Công cụ Táo</div><h1>Chào ${esc(me.owner?'Tâm':me.name)} 👋</h1><p class="tao-subtitle">Mọi việc gọn trong một chỗ.</p></div><span class="tao-avatar">${esc(me.name.trim().charAt(0).toUpperCase())}</span></div><div class="tao-live"><b class="${health.mwg_ready?'':'not-ready'}"><span class="tao-dot"></span>${esc(health.worker_label)}</b><span>${me.enabled?'Nhận CO theo quyền hiện tại':'Chỉ Tâm được tạo CO'}</span></div>${me.notice?`<div class="tao-info-card tao-long-text">${esc(me.notice)}</div>`:''}<div class="tao-grid">${tools.map(([p,i,t,d],n)=>`<button class="tao-tool ${n===0?'tao-tool-featured':''}" data-go="${p}"><span class="tao-tool-icon">${icon(i)}</span><strong>${t}</strong><small>${d}</small></button>`).join('')}</div><div class="tao-section-heading"><h2>Yêu cầu đang xử lý</h2><button class="tao-link" data-go="queue">Xem tất cả ${icon('arrow')}</button></div>${state.jobs.length?state.jobs.slice(0,2).map(jobCard).join(''):'<div class="tao-info-card tao-empty">Không có yêu cầu đang chờ.</div>'}${me.admin?`<button class="tao-admin-entry" data-go="admin">${icon('shield')}<span>${me.owner?'Quản lý của Tâm':'Quản lý ADM'}<small>${me.owner?'Bật/tắt bot · Mở khóa · Hàng chờ':'Bật/tắt nhận CO · Trạng thái bot'}</small></span>${icon('right')}</button>`:''}`;
   }
   const fieldLabels={source:'Kho xuất',destination:'Kho nhận',product:'Mã sản phẩm',quantity:'Số lượng',status:'Trạng thái',note:'Note'};
@@ -136,6 +136,79 @@
       }
     }
   }
+  const basket={data:null,statuses:[],edit:null,pending:null,changed:false};
+  function forward(){
+    if(!state.me.owner)return title('Giỏ nháp')+'<div class="tao-info-card">Chỉ Tâm được dùng giỏ nháp.</div>';
+    const draft=basket.data,edit=basket.edit;
+    const heading=title('Giỏ nháp của Tâm','Đồng bộ tin gom trong chat riêng với bot');
+    if(!draft)return heading+'<div class="tao-empty">Đang tải giỏ nháp…</div>';
+    const pending=basket.pending?`<div class="tao-info-card"><p>Đang kiểm tra lần gửi trước để tránh gửi trùng.</p><button class="tao-primary tao-wide" data-forward-action="recover">Kiểm tra lần gửi</button><button class="tao-secondary tao-wide" data-forward-action="submit">Thử lại cùng lần gửi</button></div>`:'';
+    if(draft.state!=='collecting')return heading+pending+`<section class="tao-info-card"><h2>${draft.state==='sent'?'Đã gửi giỏ nháp':draft.state==='paused'?'Giỏ cũ đã hết thời gian lưu':'Gom nháp đang tắt'}</h2><p class="tao-product tao-long-text">${esc(draft.receipt||'Bật gom, rồi chuyển tiếp các tin văn bản vào chat riêng của bot. Tin sẽ xuất hiện ở đây để em xem và sửa.')}</p>${draft.job_id?`<button class="tao-primary tao-wide" data-job="${esc(draft.job_id)}">Xem yêu cầu đã gửi ${icon('arrow')}</button>`:''}<button class="tao-secondary tao-wide" data-forward-action="start" ${basket.pending?'disabled':''}>${draft.state==='sent'?'Gom giỏ tiếp theo':'Bật gom nháp'}</button>${draft.state==='sent'?'<p class="tao-hint">Gom vẫn bật. Tin LINE mới sẽ vào giỏ mới.</p>':''}</section>`;
+    const fields=(item,index)=>Object.keys(fieldLabels).map(key=>{
+      const id='forward-'+index+'-'+key,value=edit.values[key]||'',bad=item.errors[key]||'';
+      const attrs=`id="${id}" data-forward-field="${key}" aria-invalid="${!!bad}" ${basket.pending?'disabled':''}`;
+      const control=key==='status'?`<select ${attrs}>${!basket.statuses.includes(value)?`<option value="${esc(value)}">${esc(value||'Chọn trạng thái')}</option>`:''}${basket.statuses.map(v=>`<option ${v===value?'selected':''}>${esc(v)}</option>`).join('')}</select>`:key==='note'?`<textarea ${attrs} rows="3" maxlength="500">${esc(value)}</textarea>`:`<input ${attrs} type="text" inputmode="numeric" autocomplete="off" value="${esc(value)}">`;
+      return `<div class="tao-compose-field ${['product','note'].includes(key)?'full':''}"><label for="${id}">${fieldLabels[key]}</label>${control}${bad?`<small class="tao-field-error">${esc(bad)}</small>`:''}</div>`;
+    }).join('');
+    return heading+`<div class="tao-forward-sync"><span class="tao-badge success">${icon('lock')}Chỉ Tâm</span><span>Tự cập nhật · 6 giây</span></div><div class="tao-compose-overview"><strong>${draft.messages} tin · ${draft.rows.length}/${draft.max_rows} dòng</strong><span>Chưa gửi</span></div><p class="tao-hint">Chuyển tiếp thêm tin vào chat riêng đang bật !gom. Note của từng dòng được giữ riêng; người yêu cầu là Tâm.</p><div id="forward-conflict" class="tao-info-card" ${basket.changed?'':'hidden'}><p>Giỏ đã thay đổi trên LINE hoặc thiết bị khác. Bản sửa của em vẫn được giữ, chưa ghi đè lên giỏ.</p><button class="tao-secondary tao-wide" data-forward-action="reload">Tải bản mới</button></div>${draft.edit_index>=0?`<div class="tao-info-card">Đang sửa tin ${draft.edit_index+1} trên LINE. Hoàn tất hoặc bấm Thôi sửa trên LINE trước khi gửi. Lưu một dòng tại đây sẽ kết thúc lượt sửa tin đó.</div>`:''}${draft.global_errors.length?`<p class="tao-field-error">${draft.global_errors.map(esc).join('<br>')}</p>`:''}<div class="tao-compose-list">${draft.rows.map((item,index)=>{
+      const row=item.values,open=edit?.index===index;
+      const bad=[...Object.values(item.errors),...(item.entry_error?[item.entry_error]:[])];
+      return `<section class="tao-compose-row" aria-label="Dòng nháp ${index+1}"><button class="tao-compose-toggle" data-forward-edit="${index}" aria-expanded="${open}" ${basket.pending?'disabled':''}><span class="tao-compose-number">${index+1}</span><span class="tao-compose-summary"><small class="tao-forward-origin">Tin ${item.entry+1}</small><span class="tao-compose-route">${esc(row.source||'?')} ${icon('arrow')} ${esc(row.destination||'?')}</span><span class="tao-compose-code">MSP ${esc(row.product||'Chưa có')}</span><span class="tao-compose-meta"><span>SL ${esc(row.quantity)}</span><span>${esc(row.status)}</span></span>${bad.length?'<span class="tao-compose-invalid">Cần kiểm tra dòng này</span>':''}</span><span class="tao-compose-edit-label">${open?'Đang sửa':'Sửa'} ${icon('right')}</span></button>${row.note&&!open?`<p class="tao-forward-note">${esc(row.note)}</p>`:''}${bad.length?`<p class="tao-field-error tao-forward-note">${bad.map(esc).join('<br>')}</p>`:''}${open?`<div class="tao-compose-body"><div class="tao-compose-fields">${fields(item,index)}</div><div class="tao-compose-row-actions"><button class="tao-link tao-compose-remove" data-forward-remove="${index}">Bỏ dòng</button><button class="tao-secondary" data-forward-action="cancel">Thôi sửa</button><button class="tao-primary" data-forward-action="save" ${basket.changed?'disabled':''}>Lưu dòng</button></div></div>`:`<div class="tao-forward-remove"><button class="tao-link tao-compose-remove" data-forward-remove="${index}" ${basket.pending?'disabled':''}>${icon('x')}Bỏ dòng ${index+1}</button></div>`}</section>`;
+    }).join('')}</div>${!draft.rows.length?'<div class="tao-info-card tao-empty">Giỏ chưa có tin. Chuyển tiếp tin văn bản vào chat riêng của bot để bắt đầu.</div>':''}${draft.warnings.map(w=>`<p class="tao-hint">Dòng ${w.row+1}: ${esc(w.message)}</p>`).join('')}${pending||`<div class="tao-actions"><button class="tao-primary tao-wide" data-forward-action="submit" ${!draft.can_send||edit||basket.changed?'disabled':''}>${icon('arrow')}Gửi yêu cầu · ${draft.rows.length} dòng</button></div>`}<p class="tao-hint">${edit?'Lưu dòng hoặc Thôi sửa trước khi gửi. ':''}Sau khi gửi, bot lấy dữ liệu MWG rồi em Xác nhận trong 1 phút để tạo CO.</p>`;
+  }
+  function acceptBasket(response){
+    basket.data=response.draft;
+    if(response.statuses)basket.statuses=response.statuses;
+    basket.changed=false;
+  }
+  async function forwardAction(action,index){
+    if(state.busy||!state.me.owner)return;
+    if(action==='cancel'){basket.edit=null;await refresh();return;}
+    if(action==='reload'){
+      if(basket.edit&&!window.confirm('Bỏ phần sửa chưa lưu và tải giỏ mới từ LINE?'))return;
+      basket.edit=null;await refresh();return;
+    }
+    const draft=basket.data,edit=basket.edit;
+    if(action==='remove'&&edit&&edit.index!==index){error('Lưu dòng hoặc Thôi sửa trước khi bỏ dòng khác.');return;}
+    if(action==='remove'&&!window.confirm('Bỏ dòng '+(index+1)+' khỏi giỏ nháp chung với LINE?'))return;
+    state.busy=true;++serial;loading(true);error('');
+    main.querySelectorAll('button,input,textarea,select').forEach(el=>el.disabled=true);
+    let destination=null;
+    try{
+      let response;
+      if(action==='start')response=await api('forward-draft/start',{method:'POST',body:JSON.stringify({id:draft.id,revision:draft.revision})});
+      else if(action==='save'||action==='remove'){
+        const item=action==='save'?edit.ref:draft.rows[index];
+        response=await api('forward-draft/row',{method:'POST',body:JSON.stringify({id:edit?.id||draft.id,revision:edit?.revision??draft.revision,entry:item.entry,row:item.row,action:action==='save'?'save':'remove',...(action==='save'?{values:edit.values}:{})})});
+        basket.edit=null;
+      }else if(action==='submit'){
+        if(!basket.pending){
+          if(edit||basket.changed||!draft.can_send)return;
+          basket.pending={id:draft.id,revision:draft.revision};
+        }
+        response=await api('forward-draft/submit',{method:'POST',body:JSON.stringify(basket.pending)});
+        basket.pending=null;destination=response.job;
+      }else if(action==='recover'){
+        if(!basket.pending)return;
+        response=await api('forward-draft/submissions/'+basket.pending.id);
+        if(response.found||response.skipped){basket.pending=null;destination=response.job;}
+        else error('Chưa thấy lần gửi được ghi nhận. Dùng Thử lại cùng lần gửi để kiểm tra và gửi tiếp.');
+      }
+      if(response?.draft)acceptBasket(response);
+      if(response?.message)error(response.message);
+      if(response?.skipped)error(response.message||'Bot đã xử lý lần gửi này và bỏ qua các dòng trùng. Không tạo yêu cầu mới.');
+      if(!destination&&!basket.edit&&!basket.pending)acceptBasket(await api('forward-draft'));
+    }catch(e){
+      if(e.status&&e.status<500&&![401,429].includes(e.status))basket.pending=null;
+      if(e.status===409){basket.changed=true;if(!basket.edit)acceptBasket(await api('forward-draft').catch(()=>({draft:basket.data})));}
+      error(e.message);
+      if(e.status===401)loginScreen('Phiên đăng nhập hết hạn. Giỏ nháp đã lưu vẫn nằm trên bot.');
+    }finally{
+      state.busy=false;loading(false);
+      if(destination)await go('detail',destination.id);else render();
+    }
+  }
+
   async function acknowledgePreview(){
     const job=state.job;
     if(state.page!=='detail'||document.hidden||!job?.can_ack_preview||state.busy)return;
@@ -190,7 +263,7 @@
   function render(){
     if(!state.me)return;
     navigation();
-    main.innerHTML=({home,queue,detail,compose,lookup,conditions,report,admin,operations}[state.page]||home)();
+    main.innerHTML=({home,queue,detail,compose,forward,lookup,conditions,report,admin,operations}[state.page]||home)();
     countdown();
     if(state.page==='detail'&&state.job?.can_ack_preview)requestAnimationFrame(()=>acknowledgePreview());
   }
@@ -213,6 +286,16 @@
       if(page==='compose'){
         editor.options=await api('compose');if(generation!==serial)return;
         if(!editor.options.scopes.some(s=>s.value===editor.scope))editor.scope='group';
+      }else if(page==='forward'&&me.owner){
+        const response=await api('forward-draft');if(generation!==serial)return;
+        if(basket.edit){
+          basket.changed=response.draft.id!==basket.edit.id||response.draft.revision!==basket.edit.revision;
+          const banner=document.getElementById('forward-conflict');if(banner)banner.hidden=!basket.changed;
+          const save=main.querySelector('[data-forward-action="save"]');if(save)save.disabled=basket.changed;
+          return; // Keep focus, unsaved input and row references intact during synchronization.
+        }
+        if(quiet&&basket.data?.id===response.draft.id&&basket.data?.revision===response.draft.revision&&basket.data?.job_id===response.draft.job_id)return;
+        acceptBasket(response);
       }else if(page==='home'||page==='queue'){
         const data=await api('jobs?filter='+(page==='home'?'active':state.filter));
         if(generation!==serial)return;state.jobs=data.jobs;state.offset=0;state.more=data.more;
@@ -263,12 +346,21 @@
   }
   document.getElementById('tao-app').addEventListener('click',async event=>{
     const button=event.target.closest('button');if(!button||button.disabled||state.busy)return;
-    if(button.id==='refresh'){if(state.me)await refresh();else await start();return;}
+    if(button.id==='refresh'){if(state.page==='forward'&&basket.edit){await forwardAction('reload');return;}if(state.me)await refresh();else await start();return;}
     if(button.dataset.go){await go(button.dataset.go);return;}
     if(button.dataset.job){await go('detail',button.dataset.job);return;}
     if(button.dataset.filter){state.filter=button.dataset.filter;await refresh();return;}
     if(button.dataset.period){state.period=button.dataset.period;await refresh();return;}
     if(button.dataset.copy){try{await navigator.clipboard.writeText(button.dataset.copy);error('Đã sao chép mã CO.');}catch{error('Em nhấn giữ mã CO để sao chép nhé.');}return;}
+    if(button.dataset.forwardAction){await forwardAction(button.dataset.forwardAction);return;}
+    if(button.dataset.forwardRemove!==undefined){await forwardAction('remove',Number(button.dataset.forwardRemove));return;}
+    if(button.dataset.forwardEdit!==undefined&&!basket.pending){
+      const index=Number(button.dataset.forwardEdit),item=basket.data?.rows[index];
+      if(!item)return;
+      if(basket.edit){error('Lưu dòng hoặc Thôi sửa trước khi chọn dòng khác.');return;}
+      basket.edit={index,id:basket.data.id,revision:basket.data.revision,ref:{entry:item.entry,row:item.row},values:{...item.values}};
+      render();document.getElementById('forward-'+index+'-source')?.focus({preventScroll:true});return;
+    }
     if(button.dataset.composeRow!==undefined&&!editor.pending){
       const index=Number(button.dataset.composeRow);editor.openRow=editor.openRow===index?-1:index;render();
       document.getElementById('compose-toggle-'+index)?.focus({preventScroll:true});return;
@@ -330,13 +422,18 @@
           await mutate('admin/intake',{enabled});await refresh(true);
         }break;}
       case 'logout':
-        if(await mutate('logout')){editor.text='';editor.review=null;editor.pending=null;editor.openRow=-1;editor.showSource=true;if(liffReady)liff.logout();loginScreen('Đã đăng xuất.');}break;
+        if(await mutate('logout')){basket.data=null;basket.edit=null;basket.pending=null;basket.changed=false;editor.text='';editor.review=null;editor.pending=null;editor.openRow=-1;editor.showSource=true;if(liffReady)liff.logout();loginScreen('Đã đăng xuất.');}break;
       case 'more':
         try{loading(true);const data=await api('jobs?filter='+state.filter+'&offset='+(state.jobs.length));const seen=new Set(state.jobs.map(j=>j.id));state.jobs.push(...data.jobs.filter(j=>!seen.has(j.id)));state.more=data.more;render();}catch(e){error(e.message);}finally{loading(false);}break;
     }
   });
-  main.addEventListener('input',event=>{if(state.page==='compose')composeEdit(event.target);});
+  function forwardEdit(target){
+    if(state.page==='forward'&&basket.edit&&Object.hasOwn(fieldLabels,target.dataset.forwardField))
+      basket.edit.values[target.dataset.forwardField]=target.value;
+  }
+  main.addEventListener('input',event=>{if(state.page==='compose')composeEdit(event.target);forwardEdit(event.target);});
   main.addEventListener('change',event=>{
+    forwardEdit(event.target);
     if(state.page==='compose')composeEdit(event.target);
     if(event.target.matches('[data-unknown-check]')){
       state.unknownChecked=event.target.checked===true;
@@ -362,7 +459,7 @@
   }
   timer=setInterval(()=>{
     countdown();
-    if(!document.hidden&&state.me&&!state.busy&&['home','queue','detail','admin'].includes(state.page))refresh(true);
+    if(!document.hidden&&state.me&&!state.busy&&['home','queue','detail','admin','forward'].includes(state.page))refresh(true);
   },6000);
   setInterval(countdown,1000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&state.me)refresh(true);});

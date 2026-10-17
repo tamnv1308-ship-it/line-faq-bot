@@ -8,7 +8,7 @@ import time
 from tao_compose import parse_editable, validate_rows, queue_payload
 from transfer_parser import fold, is_transfer_message
 
-VERSION = 1
+VERSION = 2
 SENT = object()
 
 
@@ -78,6 +78,70 @@ class ForwardDrafts:
         entries = json.loads(draft['payload'])
         rows = [row for entry in entries for row in entry['rows']]
         return entries, validate_rows(rows, self.max_rows) if rows else None
+
+
+    def snapshot(self, draft):
+        """Public owner-only draft data. Row references are valid for one revision."""
+        result={'id':draft['id'] if draft else None, 'revision':draft['revision'] if draft else 0,
+                'state':draft['state'] if draft else 'off', 'updated':draft['updated'] if draft else None,
+                'receipt':draft['receipt'] if draft else '', 'edit_index':draft['edit_index'] if draft else -1,
+                'rows':[], 'messages':0, 'global_errors':[], 'warnings':[], 'can_send':False,
+                'max_rows':self.max_rows}
+        if not draft or draft['state']!='collecting':return result
+        entries,review=self._review(draft);result['messages']=len(entries)
+        offset=0
+        for index,entry in enumerate(entries):
+            for row_index,row in enumerate(entry['rows']):
+                result['rows'].append({'entry':index,'row':row_index,'values':row,
+                    'errors':review['errors'][offset], 'entry_error':entry.get('error','')})
+                offset+=1
+            if not entry['rows']:
+                result['rows'].append({'entry':index,'row':None,
+                    'values':dict(source='',destination='',product='',quantity='1',status='Mới',note=''),
+                    'errors':{},'entry_error':entry.get('error') or 'Tin chưa có dòng hợp lệ. Sửa hoặc bỏ tin này.'})
+        if review:
+            result['global_errors']=review['global_errors'];result['warnings']=review['warnings']
+        result['can_send']=bool(review and review['valid'] and not any(e.get('error') for e in entries)
+                                and draft['edit_index']<0)
+        return result
+
+    def change_row(self, db, draft, entry_index, row_index, values=None, remove=False):
+        entries=json.loads(draft['payload'])
+        if type(entry_index) is not int or not 0<=entry_index<len(entries):
+            raise ValueError('Không tìm thấy tin cần sửa. Tải lại giỏ nháp.')
+        entry=entries[entry_index];rows=entry['rows']
+        if rows:
+            if type(row_index) is not int or not 0<=row_index<len(rows):raise ValueError('Dòng không hợp lệ.')
+        elif row_index is not None:raise ValueError('Dòng không hợp lệ.')
+        if remove:
+            if rows:rows.pop(row_index)
+            if not rows:entries.pop(entry_index)
+        else:
+            review=validate_rows([values],self.max_rows)
+            # Invalid values remain editable drafts; submit validates the whole basket.
+            if rows:rows[row_index]=review['rows'][0]
+            else:rows.append(review['rows'][0])
+            entry['error']=''
+        self._save(db,draft,payload=json.dumps(entries,ensure_ascii=False),edit_index=-1)
+
+    def submit(self, db, draft, name, reply_token=None):
+        entries,review=self._review(draft)
+        if not review or not review['valid'] or any(e.get('error') for e in entries):
+            raise ValueError('Sửa hoặc bỏ các dòng lỗi trước khi gửi. Chưa đưa vào hàng chờ.')
+        if draft['edit_index']>=0:raise ValueError('Đang sửa tin trên LINE. Hoàn tất sửa hoặc bấm Thôi sửa trước khi gửi.')
+        payload=queue_payload(review)
+        self.finalize_note(payload,name)
+        payload['request_count']=len(entries)
+        payload['forward_draft']={'id':draft['id'],'messages':len(entries)}
+        # In the same queue transaction: append/drop/send cannot race. The
+        # fixed submission key and no 10-second merge protect double taps.
+        job=self.queue.draft('forward:'+draft['id'],self.owner,self.owner,payload,
+            check_product=True,reply_token=reply_token,require_online=True,
+            check_duplicates=True,gather_seconds=0,_db=db)
+        if job['state']=='skipped':receipt=job['result']
+        else:receipt=f"Đã gửi {len(entries)} tin trong yêu cầu {job['id']}.\nĐang lấy dữ liệu MWG để gửi thông tin xác nhận. Chưa tạo CO."
+        self._save(db,draft,state='sent',receipt=receipt,edit_index=-1)
+        return job
 
     def _show(self, draft, notice='', detailed=True):
         if not draft or draft['state'] == 'off':
@@ -226,18 +290,7 @@ class ForwardDrafts:
             if not review or not review['valid'] or any(e.get('error') for e in entries):
                 return self._show(draft,'Sửa hoặc bỏ các tin lỗi trước khi gửi. Chưa đưa vào hàng chờ.')
             if draft['edit_index']>=0:return self._show(draft,'Hoàn tất sửa tin hoặc bấm Thôi sửa trước khi gửi.')
-            payload=queue_payload(review)
-            self.finalize_note(payload,name)
-            payload['request_count']=len(entries)
-            payload['forward_draft']={'id':draft['id'],'messages':len(entries)}
-            # In the same queue transaction: append/drop/send cannot race. The
-            # fixed submission key and no 10-second merge protect double taps.
-            job=self.queue.draft('forward:'+draft['id'],self.owner,self.owner,payload,
-                check_product=True,reply_token=event.reply_token,require_online=True,
-                check_duplicates=True,gather_seconds=0,_db=db)
-            if job['state']=='skipped':receipt=job['result']
-            else:receipt=f"Đã gửi {len(entries)} tin trong yêu cầu {job['id']}.\nĐang lấy dữ liệu MWG để gửi thông tin xác nhận. Chưa tạo CO."
-            self._save(db,draft,state='sent',receipt=receipt,edit_index=-1)
+            job=self.submit(db,draft,name,event.reply_token)
             # Reserve this reply token for the normal MWG preview; !gom xem can
             # retrieve the receipt meanwhile, without forcing a paid push.
             return SENT if job['state']!='skipped' else self._show(draft)

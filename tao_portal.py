@@ -20,6 +20,7 @@ from co_flow import (Queue, PRIVATE_CO_OWNER, MEMBER_CO_GROUP, DISABLED_CO_GROUP
                      BotUnavailable, CONFIRM_SECONDS, BOT_OFF_NOTICE, MAX_BATCH_ROWS,
                      GATHER_SECONDS, add_requester_note)
 from tao_compose import parse_editable, validate_rows, queue_payload, STATUSES
+from co_forward import ForwardDrafts
 import co_observability as observe
 from co_health import readiness
 from co_results import items, decode_results
@@ -28,7 +29,7 @@ from co_conditions import load_conditions, fold, condition_text
 from co_summary import aggregate, period, TZ
 from co_summary_view import details as summary_details
 
-VERSION = 4
+VERSION = 5
 COOKIE = '__Host-tao_session'
 SESSION_SECONDS = 900
 ROOT = Path(__file__).resolve().parent
@@ -125,6 +126,7 @@ def install(app, reply, default_users=()):
     bp = Blueprint('tao', __name__, url_prefix='/tao')
     path = os.environ.get('CO_DATABASE_URL') or os.environ.get('CO_DB_PATH')
     q = Queue(path) if os.getenv('CO_ENABLED') == '1' and path else None
+    forward = ForwardDrafts(q,PRIVATE_CO_OWNER,add_requester_note,MAX_BATCH_ROWS) if q else None
     secret = os.environ.get('CHANNEL_SECRET', '')
     signer = URLSafeTimedSerializer(hashlib.sha256(('tao-session-v1:'+secret).encode()).hexdigest(), salt='tao-v1')
     admins = set(default_users) | {PRIVATE_CO_OWNER}
@@ -207,7 +209,7 @@ def install(app, reply, default_users=()):
                 'updated':job['updated'],'expires_at':deadline,'rows':[],
                 'can_confirm':job['state']=='draft' and bool(deadline and deadline>time.time()) and job['chat']!=DISABLED_CO_GROUP,
                 'can_cancel':job['state'] in WAITING}
-        result['can_ack_preview']=bool(details and job['owner']==user['uid'] and payload.get('portal_requests')
+        result['can_ack_preview']=bool(details and job['owner']==user['uid'] and (payload.get('portal_requests') or payload.get('forward_draft'))
             and job['state']=='draft' and job['result']=='MWG_PREVIEW' and not job['notified'])
         if result['can_ack_preview']:result['preview_revision']=unknown_revision(job)
         policies=load_conditions() if details and any('iphone' in fold(x.get('product_name','')) for x in rows) else {}
@@ -400,6 +402,82 @@ def install(app, reply, default_users=()):
         return jsonify(job=public_job(job,user,True),server_time=time.time(),
                        message='Đã nhận yêu cầu, đang lấy dữ liệu từ MWG. Kiểm tra thông tin rồi bấm Xác nhận để tạo CO.')
 
+    def forward_key(value):
+        if not isinstance(value,str) or not re.fullmatch(r'[a-f0-9]{10}',value):
+            raise PortalError('Mã giỏ nháp không hợp lệ.')
+        return 'forward:'+value
+
+    def forward_current(db,data,collecting=True):
+        draft=forward._read(db)
+        if (not draft or data.get('id')!=draft['id'] or type(data.get('revision')) is not int
+                or data['revision']!=draft['revision'] or (collecting and draft['state']!='collecting')):
+            raise PortalError('Giỏ nháp đã thay đổi trên LINE hoặc thiết bị khác. Tải bản mới rồi kiểm tra lại.',409)
+        return draft
+
+    def forward_receipt(db,sid):
+        event=forward_key(sid)
+        job=db.execute('SELECT * FROM jobs WHERE event=? AND owner=?',(event,PRIVATE_CO_OWNER)).fetchone()
+        skipped=bool(db.execute('SELECT 1 FROM co_event_tombstones WHERE digest=?',
+                               (hashlib.sha256(event.encode()).hexdigest(),)).fetchone())
+        return dict(job) if job else None,skipped
+
+    @bp.get('/api/forward-draft')
+    def forward_get():
+        user=identity();require_owner(user)
+        with q.db() as db:
+            draft=forward._read(db);view=forward.snapshot(draft)
+            job,skipped=forward_receipt(db,draft['id']) if draft else (None,False)
+        view['job_id']=job['id'] if job else None
+        return jsonify(draft=view,statuses=STATUSES,server_time=time.time())
+
+    @bp.post('/api/forward-draft/start')
+    def forward_start():
+        user=identity(True);require_owner(user);data=body()
+        with q.db() as db:
+            draft=forward._read(db)
+            if draft:forward_current(db,data,False)
+            elif data.get('id') is not None or data.get('revision')!=0:
+                raise PortalError('Tải lại giỏ nháp trước khi bật gom.',409)
+            if not draft or draft['state']!='collecting':draft=forward._new(db,user['uid'],time.time())
+            view=forward.snapshot(draft)
+        return jsonify(draft=view,message='Đã bật gom nháp. Chuyển tiếp tin văn bản vào chat riêng của bot để thêm vào giỏ.')
+
+    @bp.post('/api/forward-draft/row')
+    def forward_row():
+        user=identity(True);require_owner(user);rate(('forward-row',user['uid']),40);data=body()
+        action=data.get('action')
+        if action not in ('save','remove'):raise PortalError('Thao tác dòng không hợp lệ.')
+        try:
+            with q.db() as db:
+                draft=forward_current(db,data)
+                forward.change_row(db,draft,data.get('entry'),data.get('row'),data.get('values'),action=='remove')
+                view=forward.snapshot(draft)
+        except ValueError as error:raise PortalError(str(error)) from None
+        return jsonify(draft=view,message='Đã lưu dòng vào giỏ chung với LINE.' if action=='save' else 'Đã bỏ dòng khỏi giỏ nháp.')
+
+    @bp.get('/api/forward-draft/submissions/<sid>')
+    def forward_submission(sid):
+        user=identity();require_owner(user)
+        with q.db() as db:job,skipped=forward_receipt(db,sid)
+        return jsonify(found=bool(job),skipped=skipped,job=public_job(job,user,True) if job else None)
+
+    @bp.post('/api/forward-draft/submit')
+    def forward_submit():
+        user=identity(True);require_owner(user);rate(('forward-submit',user['uid']),12);data=body()
+        try:
+            with q.db() as db:
+                # Resolve an earlier send even if LINE has already started the next basket.
+                job,skipped=forward_receipt(db,data.get('id'))
+                if not job and not skipped:
+                    draft=forward_current(db,data)
+                    job=forward.submit(db,draft,user['name'])
+                    skipped=job['state']=='skipped'
+                message=(job.get('result') if job and skipped else '')
+        except ValueError as error:raise PortalError(str(error),409) from None
+        if skipped:return jsonify(skipped=True,message=message or 'Lần gửi này đã được xử lý. Không còn dòng mới để tạo yêu cầu.')
+        return jsonify(job=public_job(job,user,True),server_time=time.time(),
+                       message='Đã gửi giỏ nháp. Đang lấy dữ liệu MWG; em vẫn cần Xác nhận để tạo CO.')
+
     @bp.post('/api/jobs/<jid>/preview-seen')
     def preview_seen(jid):
         user=identity(True);job=get_job(jid,user);operation_allowed(job,user)
@@ -407,7 +485,7 @@ def install(app, reply, default_users=()):
         if not isinstance(revision,str):raise PortalError('Thiếu bản xác nhận đang hiển thị.')
         with q.db() as db:
             row=db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
-            if not row or row['owner']!=user['uid'] or not json.loads(row['payload']).get('portal_requests'):
+            if not row or row['owner']!=user['uid'] or not any(json.loads(row['payload']).get(k) for k in ('portal_requests','forward_draft')):
                 raise PortalError('Chỉ người gửi được ghi nhận đã xem form của mình.',403)
             if row['state']=='draft' and row['result']=='MWG_PREVIEW' and row['notified']:
                 pass  # LINE or another tab already started the same one-minute deadline.
