@@ -108,6 +108,30 @@ class TelegramTests(unittest.TestCase):
         self.send(form(),uid=1,group=None)
         self.assertEqual(self.jobs()[0]['owner'],OWNER);self.assertEqual(self.jobs()[0]['chat'],'tg:1')
 
+    def test_setup_group_discovery_does_not_grant_access_or_keep_messages(self):
+        update=self.update('/start@test_tao_bot',group=-999)
+        update['message']['chat']['title']='CÔNG CỤ HỖ TRỢ'
+        self.bridge.process(update,(self.handle,))
+        self.send(form(),group=-999)
+        self.assertEqual(self.jobs(),[]);self.assertEqual(self.api.calls,[])
+        with self.q.db() as db:
+            rows=[dict(r) for r in db.execute('SELECT * FROM co_telegram_seen_groups')]
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['chat_id'],'-999')
+        self.assertEqual(rows[0]['title'],'CÔNG CỤ HỖ TRỢ')
+        self.assertEqual(set(rows[0]),{'bot_id','chat_id','title','seen'})
+        self.send('/start@another_bot',group=-998)
+        self.send('/start',group=-997)
+        stale=self.update('/start@test_tao_bot',group=-996)
+        stale['message']['date']=int(time.time())-301
+        self.bridge.process(stale,(self.handle,))
+        with self.q.db() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) n FROM co_telegram_seen_groups').fetchone()['n'],1)
+            db.execute('UPDATE co_telegram_seen_groups SET seen=0')
+        self.bridge.cleanup()
+        with self.q.db() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) n FROM co_telegram_seen_groups').fetchone()['n'],0)
+
     def test_preview_buttons_and_other_user_cannot_confirm_or_cancel(self):
         self.send(form(),uid=2);job=self.preview()
         buttons=self.api.calls[-1][1]['reply_markup']['inline_keyboard']

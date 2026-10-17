@@ -65,6 +65,9 @@ def schema(db):
       CREATE TABLE IF NOT EXISTS co_telegram_deliveries (
         delivery_key TEXT PRIMARY KEY, state TEXT NOT NULL, retry_at REAL NOT NULL,
         message_id TEXT NOT NULL, updated REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS co_telegram_seen_groups (
+        bot_id TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL,
+        seen REAL NOT NULL, PRIMARY KEY(bot_id,chat_id));
     ''')
 
 
@@ -239,6 +242,16 @@ class Bridge:
         chat=message.get('chat',{});kind=chat.get('type');cid=chat.get('id')
         if type(cid) is not int or kind not in ('private','group','supergroup') or message.get('sender_chat'):return
         if kind=='private' and cid!=sender['id']:return
+        # Record only group identity from an explicit setup command. This never
+        # grants access, sends a reply to an unconfigured group, or saves chat text.
+        setup_command=str(message.get('text','')).strip()
+        if (not callback and kind!='private' and cid<0 and
+                re.fullmatch(r'/start@'+re.escape(cfg['username']),setup_command,re.I) and
+                type(message.get('date')) is int and -60<=time.time()-message['date']<=300):
+            with self.queue.db() as db:
+                db.execute('INSERT INTO co_telegram_seen_groups VALUES(?,?,?,?) '
+                           'ON CONFLICT(bot_id,chat_id) DO UPDATE SET title=excluded.title,seen=excluded.seen',
+                           (cfg['bot_id'],str(cid),str(chat.get('title',''))[:200],time.time()))
         if kind!='private' and str(cid) not in {cfg['group'],cfg['note_group']}:return
         # Topic threads need separate routing before they can be enabled.
         if message.get('is_topic_message'):return
@@ -304,6 +317,7 @@ class Bridge:
 
     def cleanup(self):
         with self.queue.db() as db:
+            db.execute('DELETE FROM co_telegram_seen_groups WHERE seen<?',(time.time()-3*86400,))
             db.execute('DELETE FROM co_telegram_link_requests WHERE expires<?',(time.time(),))
             db.execute("DELETE FROM co_telegram_updates WHERE state='done' AND received<?",(time.time()-30*86400,))
             # A stalled webhook is retained for inspection but not replayed forever.
