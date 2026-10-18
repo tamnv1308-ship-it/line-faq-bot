@@ -183,6 +183,7 @@ class Queue:
                 id INTEGER PRIMARY KEY, state TEXT NOT NULL, progress_at REAL NOT NULL);
               INSERT INTO co_worker_health(id,state,progress_at) VALUES(1,'unverified',0) ON CONFLICT(id) DO NOTHING;
             ''')
+            db.execute("CREATE TABLE IF NOT EXISTS co_worker_resets (id TEXT PRIMARY KEY, requested REAL NOT NULL, consumed REAL)")
             observe.schema(db)
             co_forward.schema(db)
 
@@ -499,10 +500,16 @@ class Queue:
             message += '\nYêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo không bị hủy.'
             return message + self.blocked_notice(db)
 
-    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False, recovery_protocol=False, page_ready=False):
+    def claim(self, preview_protocol=False, prepared_id=None, batch_protocol=False, require_online=False, recovery_protocol=False, page_ready=False, reset_protocol=False):
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
             owner_only=not db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled']
+            if reset_protocol and not prepared_id:
+                reset=db.execute('SELECT id FROM co_worker_resets WHERE consumed IS NULL AND requested>? ORDER BY requested LIMIT 1',(time.time()-120,)).fetchone()
+                busy=db.execute("SELECT 1 FROM jobs WHERE state IN ('draft','running','submitting','preview_running','verified_queued')").fetchone()
+                if reset and not busy:
+                    db.execute('UPDATE co_worker_resets SET consumed=? WHERE id=?',(time.time(),reset['id']))
+                    return {'reset_workspace':True}
             if prepared_id:
                 prepared=db.execute('SELECT * FROM jobs WHERE id=?',(prepared_id,)).fetchone()
                 if not prepared or prepared['state'] not in {'draft','queued','verified_queued'}:
@@ -798,7 +805,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
             try:queue.heartbeat(True,body['health'])
             except ValueError:abort(400)
         return jsonify(queue.claim(body.get('preview_protocol')==1,prepared,body.get('batch_protocol')==1,require_online=True,
-                                   recovery_protocol=body.get('recovery_protocol')==1,page_ready=body.get('page_ready') is True))
+                                   recovery_protocol=body.get('recovery_protocol')==1,page_ready=body.get('page_ready') is True,reset_protocol=body.get('reset_protocol')==1))
 
     @app.post('/co/worker/heartbeat')
     def heartbeat():

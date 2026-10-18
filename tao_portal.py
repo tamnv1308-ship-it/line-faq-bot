@@ -338,6 +338,16 @@ def install(app, reply, default_users=()):
         except ValueError as error:raise PortalError(str(error),409) from None
         return jsonify(message='Đã liên kết Telegram với tài khoản LINE của bạn. Quyền hiện tại được giữ nguyên.')
 
+    @bp.post('/api/admin/reset-worker')
+    def reset_worker():
+        user=identity(True);require_owner(user)
+        with q.db() as db:
+            if db.execute("SELECT 1 FROM jobs WHERE state IN ('draft','running','submitting','preview_running','verified_queued')").fetchone():
+                raise PortalError('Đang chờ xác nhận hoặc đang xử lý CO. Hãy chờ hoàn tất trước khi reset.',409)
+            rate(('reset-worker',user['uid']),3)
+            db.execute('INSERT INTO co_worker_resets(id,requested) VALUES(?,?)',(secrets.token_hex(12),time.time()))
+        return jsonify(message='Đã gửi yêu cầu làm mới trang làm việc. Mac phải đang chạy để nhận trong 2 phút; giữ nguyên hàng chờ và kết quả chưa rõ, không tạo lại CO.')
+
     @bp.get('/api/admin/operations')
     def operations():
         user=identity();require_owner(user);rate(('operations',user['uid']),30)

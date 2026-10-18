@@ -59,6 +59,27 @@ class PortalTests(unittest.TestCase):
     def state(self,jid):
         with self.q.db() as db:return db.execute('SELECT state FROM jobs WHERE id=?',(jid,)).fetchone()['state']
 
+    def test_reset_owner_only_preserves_unknown_and_waiting(self):
+        self.login(MEMBER)
+        self.assertEqual(self.call('admin/reset-worker','POST',{}).status_code,403)
+        self.login(OWNER)
+        jid=self.job(state='unknown')
+        self.assertEqual(self.call('admin/reset-worker','POST',{}).status_code,200)
+        self.assertEqual(self.state(jid),'unknown')
+        result=self.q.claim(reset_protocol=True)
+        self.assertTrue(result['reset_workspace'])
+        self.assertEqual(self.state(jid),'unknown')
+        with self.q.db() as db:
+            self.assertIsNotNone(db.execute('SELECT consumed FROM co_worker_resets').fetchone()['consumed'])
+
+    def test_reset_rejected_during_confirmation_and_creation(self):
+        self.login(OWNER)
+        jid=self.job(state='draft')
+        for state in ('draft','running','submitting','preview_running','verified_queued'):
+            with self.q.db() as db:db.execute('UPDATE jobs SET state=? WHERE id=?',(state,jid))
+            self.assertEqual(self.call('admin/reset-worker','POST',{}).status_code,409)
+            self.assertEqual(self.state(jid),state)
+
     def test_public_assets_and_login_required(self):
         for path in ('/tao/','/tao/privacy','/tao/assets/app.js','/tao/assets/app.css'):
             with self.client.get(path) as response:self.assertEqual(response.status_code,200)

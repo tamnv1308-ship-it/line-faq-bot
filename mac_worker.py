@@ -336,6 +336,13 @@ def reconcile_late_submissions(guard):
                 if guard.uncertain_job==job['id']:guard.uncertain_job=None
         capture.close();guard.late_submissions.remove(entry)
 
+def isolate_workspace(context, page, guard, preserved, prepared_id=None):
+    if prepared_id or (ROOT/'pending.json').exists() or len(preserved)>=3:
+        return page,guard,False
+    fresh=context.new_page()
+    preserved.append(guard)
+    return fresh,RecoveryGuard(fresh,track_submissions=guard.track_submissions),True
+
 def fill_template(source, target, data):
     from openpyxl import load_workbook
     wb = load_workbook(source)
@@ -913,6 +920,7 @@ def main():
                             raise RuntimeError('Có tác vụ dở ở bước tạo. Kiểm tra MWG trước khi chạy lại.')
                     refresh_at=time.monotonic()+300
                     prepared_id=None
+                    preserved_guards=[]
                     from mwg_api_worker import ApiWorker
                     api_worker=ApiWorker() if args.api else None
                     guard=RecoveryGuard(page,track_submissions=not args.api)
@@ -920,7 +928,15 @@ def main():
                     repair_at=0
                     while True:
                         check_stop()
+                        for preserved in preserved_guards:
+                            reconcile_late_submissions(preserved)
                         reconcile_late_submissions(guard)
+                        if guard.uncertain_job and not prepared_id and not pending.exists() and len(preserved_guards)<3:
+                            # Preserve the exact submission page and its response listeners.
+                            # Server unknown-stock protection prevents replay on the fresh page.
+                            page,guard,_=isolate_workspace(context,page,guard,preserved_guards,prepared_id)
+                            recovery_ready=False
+                            print('Giữ trang CO chưa rõ kết quả; mở trang riêng cho yêu cầu khác, không tạo lại CO cũ.',flush=True)
                         context,page=ensure_browser(pw,context,page,background=args.background)
                         page=find_idle_mwg_page(context,page,guard,prepared_id)
                         if page.url in ('about:blank','chrome://newtab/'):
@@ -950,8 +966,17 @@ def main():
                             if ready:health_state('ready')
                             elif on_mwg:health_state('blocked')
                         job=claim_with_reconnect({'preview_protocol':1,'prepared_id':prepared_id,'batch_protocol':1,
-                                                 'recovery_protocol':int(not args.api),
+                                                 'reset_protocol':1,'recovery_protocol':int(not args.api),
                                                  'page_ready':recovery_ready and guard.ready()})
+                        if job and job.get('reset_workspace'):
+                            if not prepared_id and not pending.exists() and len(preserved_guards)<3:
+                                page,guard,_=isolate_workspace(context,page,guard,preserved_guards,prepared_id)
+                                recovery_ready=False
+                                refresh_at=time.monotonic()+300
+                                print('Đã nhận reset từ chủ bot; giữ trang cũ và mọi kết quả CO.',flush=True)
+                            else:
+                                print('Chưa reset: cần đối soát các trang đang giữ hoặc kết quả chưa gửi.',flush=True)
+                            continue
                         if job and job.get('recovery_required'):
                             recovery_ready=guard.wait_ready()
                             if not recovery_ready:

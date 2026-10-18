@@ -18,3 +18,16 @@ class ReloadBarrierTests(unittest.TestCase):
         guard.late_submissions=[object()]
         self.assertFalse(guard.ready())
         page.reload.assert_not_called()
+
+    def test_isolation_preserves_original_request_and_never_reloads(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(w,'ROOT',Path(root)):
+            context=MagicMock();page=MagicMock();guard=w.RecoveryGuard(page)
+            guard.uncertain_job='pending-co';guard.pending.add(object());preserved=[]
+            fresh,new,ok=w.isolate_workspace(context,page,guard,preserved)
+            self.assertTrue(ok);self.assertIs(fresh,context.new_page.return_value)
+            self.assertEqual(preserved,[guard]);self.assertEqual(guard.uncertain_job,'pending-co')
+            page.close.assert_not_called();page.reload.assert_not_called();page.goto.assert_not_called()
+            self.assertFalse(w.isolate_workspace(context,fresh,new,preserved,'draft-id')[2])
+            (Path(root)/'pending.json').write_text('{}')
+            self.assertFalse(w.isolate_workspace(context,fresh,new,preserved)[2])
+            context.new_page.assert_called_once()
