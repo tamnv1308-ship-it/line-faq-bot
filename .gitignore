@@ -5,3 +5,4 @@ __pycache__/
 *.db
 *.db-*
 report_images/
+.env.local

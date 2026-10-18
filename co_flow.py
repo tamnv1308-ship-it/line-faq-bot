@@ -785,6 +785,10 @@ def install(app, reply, push, default_users=(), requester_name=None):
         queue = Queue(path)
     users = set(filter(None,(x.strip() for x in os.getenv('CO_ALLOWED_USER_IDS','').split(',')))) or set(default_users)
     handle_forward=co_forward.install(queue,PRIVATE_CO_OWNER,add_requester_note,reply,requester_name,MAX_BATCH_ROWS)
+    import co_form_assist
+    form_assist = co_form_assist.Assistant(queue, reply) if queue else None
+    if not hasattr(app,'extensions'):app.extensions={}
+    app.extensions['co_form_assist'] = form_assist
 
     def authenticated():
         if not queue:
@@ -853,6 +857,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        confirmation_layout_version=CONFIRM_LAYOUT_VERSION, honors_version=HONORS_VERSION,
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
+                       form_assist_version=co_form_assist.VERSION, form_assist_enabled=co_form_assist.enabled(),
                        late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3,
                        owner_only_off_version=1, intake_mode='normal' if control['enabled'] else 'owner_only',
                        owner_accepting=health['mwg_ready'],observability_version=observe.VERSION,
@@ -1015,7 +1020,20 @@ def install(app, reply, push, default_users=(), requester_name=None):
             reply(event.reply_token,'Tài khoản chưa được cấp quyền tạo CO.'); return True
         try:
             if is_form:
-                payload=parse_request(text)
+                try:
+                    payload=parse_request(text)
+                except ValueError as error:
+                    offered=False
+                    if getattr(event,'platform','line')=='telegram' and form_assist:
+                        try:
+                            offered=form_assist.enqueue(
+                                getattr(event,'webhook_event_id',None) or 'message:'+event.message.id,
+                                owner,event.reply_token,text,PRIVATE_CO_OWNER)
+                        except Exception:
+                            app.logger.warning('Form assistance unavailable; keeping normal validation.')
+                    suffix='\nAI đang kiểm tra cách trình bày; bot sẽ gửi gợi ý riêng.' if offered else ''
+                    reply(event.reply_token,f'Form chưa hợp lệ: {error}\nVui lòng sửa và gửi lại.'+suffix)
+                    return True
                 check_destinations(payload)
                 try:
                     name=requester_name(event) if requester_name else None

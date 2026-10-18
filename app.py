@@ -363,6 +363,9 @@ if telegram:
     scheduler.add_job(lambda:telegram.drain((handle_summary,handle_co),app.logger),
                       'interval',seconds=1,id='telegram_updates',max_instances=1)
     scheduler.add_job(telegram.cleanup,'interval',hours=1,id='telegram_cleanup',max_instances=1)
+    if app.extensions.get('co_form_assist'):
+        scheduler.add_job(app.extensions['co_form_assist'].drain,
+                          'interval',seconds=1,id='co_form_assist',max_instances=1)
 scheduler.start()
 
 
