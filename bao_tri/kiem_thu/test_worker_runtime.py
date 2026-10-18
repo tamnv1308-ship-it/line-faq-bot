@@ -67,9 +67,9 @@ class RuntimeTests(unittest.TestCase):
     def test_historical_unknown_does_not_disable_idle_page_repair(self):
         page=MagicMock();page.url=w.URL;page.is_closed.return_value=False
         guard=w.RecoveryGuard(page)
+        guard.repair_at=0
         with patch.object(w,'ROOT',self.root),patch.object(w,'api',return_value={'states':{'unknown':5}}),\
-             patch.object(guard,'ready',return_value=False),patch.object(w,'select_brands'),\
-             patch.object(guard,'wait_ready',side_effect=[False,True]):
+             patch.object(guard,'ready',side_effect=[False,False,True]),patch.object(w,'select_brands'):
             self.assertTrue(w.recover_idle_controls(page,guard))
         page.reload.assert_called_once()
 
@@ -91,17 +91,21 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(w.refresh_idle(page,guard))
         page.reload.assert_not_called()
 
-    def test_idle_repair_bounded_to_five_seven_second_waits(self):
+    def test_idle_repair_bounded_to_five_fifteen_second_retries(self):
         page=MagicMock();page.url=w.URL;page.is_closed.return_value=False
-        guard=MagicMock();guard.uncertain_job=None;guard.pending=set();guard.late_submissions=[];guard.ready.return_value=False;guard.wait_ready.return_value=False
-        with patch.object(w,'select_brands'),patch.object(w,'ROOT',self.root),patch.object(w,'api',return_value={'states':{}}):
+        guard=w.RecoveryGuard(page);clock=[0.0]
+        with patch.object(guard,'ready',return_value=False),patch.object(w.time,'monotonic',side_effect=lambda:clock[0]),\
+             patch.object(w,'select_brands'),patch.object(w,'capture_failure'),patch.object(w,'ROOT',self.root),patch.object(w,'api',return_value={'states':{}}):
             self.assertFalse(w.recover_idle_controls(page,guard))
-        self.assertEqual(page.reload.call_count,4)
-        self.assertEqual([c.kwargs['timeout'] for c in guard.wait_ready.call_args_list],[7]*5)
+            for _ in range(6):
+                clock[0]+=15
+                self.assertFalse(w.recover_idle_controls(page,guard))
+            self.assertTrue(guard.repair_failed)
+        self.assertEqual(page.reload.call_count,5)
 
     def test_idle_repair_selects_brands_before_waiting_for_dependent_status(self):
         page=MagicMock();page.url=w.URL;page.is_closed.return_value=False
-        guard=w.RecoveryGuard(page);ready=[False]
+        guard=w.RecoveryGuard(page);guard.repair_at=0;ready=[False]
         with patch.object(w,'ROOT',self.root),patch.object(w,'api',return_value={'states':{'unknown':5}}),\
              patch.object(guard,'ready',side_effect=lambda:ready[0]),\
              patch.object(guard,'wait_ready',side_effect=lambda **kwargs:ready[0]),\

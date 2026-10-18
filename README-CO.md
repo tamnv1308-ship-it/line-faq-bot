@@ -8,7 +8,7 @@ Hủy/hết hạn bản xác nhận vẫn giải phóng bản nhập kể cả M
 
 Trên bản Mac đã cài: `Bat-BOT.command` mở một phiên; `Tat-BOT.command` gửi yêu cầu dừng đúng phiên bằng UUID; `Kiem-tra-BOT.command` hiển thị trạng thái. Dừng chờ thao tác hiện tại, lưu kết quả và đóng Chrome của bot, không đụng Chrome cá nhân. Nếu gửi kết quả đang lỗi mạng thì giữ file kết quả để gửi lại, không tạo lại. Khóa hệ thống được giữ đến khi trình duyệt và heartbeat dừng. Worker chặn mở hai phiên; yêu cầu dừng cũ không tác động phiên mới.
 
-Sau khi chọn thương hiệu, ô trạng thái có riêng tối đa 7 giây để xuất hiện ổn định; tối đa 5 lượt. Khi rảnh, có thể phục hồi ô trống tối đa 5 lượt; không phục hồi bằng reload khi đang giữ bản xác nhận, đang tạo CO hoặc còn kết quả chưa rõ. Giữ quy tắc reload 5 phút khi rảnh. Các file worker trên Mac dùng môi trường riêng; deploy Render không tự thay chương trình Mac đang chạy.
+Sau khi chọn thương hiệu cho một yêu cầu, ô trạng thái có riêng tối đa 7 giây để xuất hiện ổn định; tối đa 5 lượt. Riêng khi bot rảnh mà trang chưa sẵn sàng, chờ 15 giây trước lượt phục hồi đầu và giữa các lượt, tối đa 5 lượt cho mỗi đợt lỗi. Sau lượt cuối, cho trang thêm 15 giây để trả dữ liệu rồi báo cần kiểm tra nếu vẫn chưa sẵn sàng; không tự lặp thêm một đợt hoặc chờ 5 phút để thử lại. Kết nối dữ liệu còn chờ chỉ được kiểm tra, không reload. Trạng thái sẵn sàng thực sự hoặc một workspace mới mới bắt đầu lại ngân sách phục hồi. Không phục hồi bằng reload khi đang giữ bản xác nhận, đã xác nhận chờ tạo, đang tạo CO hoặc còn kết quả chưa rõ trên trang. Giữ quy tắc reload 5 phút khi rảnh và trang sẵn sàng. Các file worker trên Mac dùng môi trường riêng; deploy Render không tự thay chương trình Mac đang chạy.
 
 ## Đối soát kết quả bị từ chối (2026-10-13)
 

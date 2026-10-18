@@ -60,12 +60,15 @@ class LoadingHealthTests(unittest.TestCase):
     def test_only_exhausted_idle_repair_marks_loading_as_blocked(self):
         self.guard.page_health(False)
         with patch.object(self.guard, 'ready', return_value=False), \
-             patch.object(self.guard, 'wait_ready', return_value=False) as wait, \
              patch.object(w, 'select_brands'), patch.object(w, 'capture_failure'):
             self.assertFalse(w.recover_idle_controls(self.page, self.guard))
-        self.assertEqual(wait.call_count, 5)
-        self.assertTrue(all(call.kwargs['timeout'] == 7 for call in wait.call_args_list))
-        self.assertEqual(self.page.reload.call_count, 4)
+            for attempt in range(5):
+                self.clock += 15
+                self.assertFalse(w.recover_idle_controls(self.page, self.guard))
+                self.assertFalse(self.guard.repair_failed)
+            self.clock += 15
+            self.assertFalse(w.recover_idle_controls(self.page, self.guard))
+        self.assertEqual(self.page.reload.call_count, 5)
         self.assertEqual(self.guard.page_health(False), 'blocked')
         self.assertEqual(self.guard.page_health(True), 'ready')
         self.assertFalse(self.guard.repair_failed)

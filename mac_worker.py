@@ -19,6 +19,8 @@ URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
 TEMPLATE = Path(__file__).resolve().parent / 'templates' / 'StoreChangeOrderTGDD_template.xlsx'
 SLOW_LOADING_SECONDS = 15
+IDLE_REPAIR_INTERVAL_SECONDS = 15
+IDLE_REPAIR_MAX_ATTEMPTS = 5
 RUNTIME = None
 TELEMETRY = None
 
@@ -245,6 +247,8 @@ class RecoveryGuard:
         self.last_reason=None
         self.loading_since=None
         self.repair_failed=False
+        self.repair_at=None
+        self.repair_attempts=0
         # Historical unknown jobs stay protected by the server's stock checks.
         # Only an uncertain submission on THIS page must prevent page repair.
         self.uncertain_job=None
@@ -262,6 +266,8 @@ class RecoveryGuard:
         if reason is None:
             self.loading_since=None
             self.repair_failed=False
+            self.repair_at=None
+            self.repair_attempts=0
         if reason!=self.last_reason:
             if reason:print('MWG chưa sẵn sàng: '+reason,flush=True)
             self.last_reason=reason
@@ -271,6 +277,8 @@ class RecoveryGuard:
         if ready:
             self.loading_since=None
             self.repair_failed=False
+            self.repair_at=None
+            self.repair_attempts=0
             return 'awaiting_confirmation' if prepared_id else 'ready'
         if self.page.is_closed():return 'blocked'
         if self.page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
@@ -761,7 +769,7 @@ def refresh_idle(page, guard=None):
     # Preserve the current result page when reconciliation is still required.
     if (ROOT/'pending.json').exists():
         return False
-    if guard is not None and (guard.uncertain_job is not None or guard.late_submissions or guard.pending):
+    if guard is not None and (guard.uncertain_job is not None or guard.late_submissions or guard.pending or guard.repair_failed):
         return False
     states=api('status',None)['states']
     if any(states.get(state,0) for state in ('draft','queued','verified_queued','preview_queued','running','submitting','preview_running')):
@@ -842,33 +850,58 @@ def start_heartbeat():
 
 
 def recover_idle_controls(page, guard, prepared_id=None):
-    # A readiness repair is never allowed to erase a preview or an uncertain result.
-    if prepared_id or guard.uncertain_job is not None or guard.late_submissions or guard.pending or (ROOT/'pending.json').exists():return False
-    states=api('status',None)['states']
-    if any(states.get(k,0) for k in ('draft','preview_running','running','submitting')):
+    """One idle recovery step, spaced 15s apart and capped per loading episode.
+
+    The main loop keeps pumping browser events between steps. A pending request
+    consumes a readiness check, never permission to reload a busy CO page.
+    """
+    def protected():
+        return (prepared_id or guard.uncertain_job is not None or guard.late_submissions
+                or (ROOT/'pending.json').exists() or page.is_closed()
+                or page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL)
+    def server_idle():
+        states=api('status',None,timeout=5)['states']
+        return (not any(states.get(k,0) for k in ('draft','verified_queued','preview_running','running','submitting'))
+                and (guard.track_submissions or not states.get('unknown',0)))
+    if protected():return False
+    if guard.ready():return True
+    if guard.repair_failed:return False
+    now=time.monotonic()
+    if guard.repair_at is None:
+        guard.repair_at=now+IDLE_REPAIR_INTERVAL_SECONDS
         return False
-    if not guard.track_submissions and states.get('unknown',0):return False
-    guard.repair_failed=False
-    for attempt in range(5):
+    if now<guard.repair_at:return False
+    # Also back off failed status reads; never spin or mutate when idle is unknown.
+    guard.repair_at=now+IDLE_REPAIR_INTERVAL_SECONDS
+    try:
         check_stop()
-        if page.is_closed() or page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
+        if not server_idle() or protected():return False
+        if guard.repair_attempts>=IDLE_REPAIR_MAX_ATTEMPTS:
+            # The fifth attempt receives the same settling time before giving up.
+            guard.repair_failed=True
+            print('MWG chưa sẵn sàng sau 5 lượt thử cách nhau 15 giây. Tạm ngừng nhận CO; giữ Chrome để kiểm tra.',flush=True)
+            capture_failure(page,'readiness-error')
             return False
-        if not guard.ready():
-            try:
-                # Brand selection is the prerequisite for loading the status list.
-                # Only this idle repair path may do it without a claimed request.
-                select_brands(page)
-            except Exception as error:
-                print('Chưa chuẩn bị được thương hiệu MWG ('+type(error).__name__+').',flush=True)
-        if guard.wait_ready(timeout=7):return True
-        if guard.pending or guard.late_submissions or guard.uncertain_job is not None:return False
-        if attempt<4:
-            print('MWG chưa sẵn sàng; tải lại lượt '+str(attempt+2)+'/5.',flush=True)
-            page.reload(wait_until='domcontentloaded',timeout=15000)
-    print('MWG chưa sẵn sàng sau 5 lượt. Tạm ngừng nhận CO; giữ Chrome để kiểm tra.',flush=True)
-    guard.repair_failed=True
-    capture_failure(page,'readiness-error')
-    return False
+        guard.repair_attempts+=1
+        attempt=str(guard.repair_attempts)+'/5'
+        if guard.pending:
+            print('Kiểm tra MWG lượt '+attempt+': còn phản hồi dữ liệu, giữ nguyên trang.',flush=True)
+            return False
+        print('Phục hồi MWG khi rảnh lượt '+attempt+'.',flush=True)
+        try:
+            # Brands must be selected before the dependent status list can load.
+            select_brands(page)
+        except Exception as error:
+            print('Chưa chuẩn bị được thương hiệu MWG ('+type(error).__name__+').',flush=True)
+        if guard.ready():return True
+        # Recheck after UI waits: confirmation/submission may have started meanwhile.
+        if protected() or guard.pending or not server_idle() or protected() or guard.pending:
+            return False
+        page.reload(wait_until='domcontentloaded',timeout=15000)
+        return guard.ready()
+    finally:
+        if guard.repair_at is not None:
+            guard.repair_at=time.monotonic()+IDLE_REPAIR_INTERVAL_SECONDS
 
 def main():
     global RUNTIME, TELEMETRY
@@ -953,7 +986,6 @@ def main():
                     api_worker=ApiWorker() if args.api else None
                     guard=RecoveryGuard(page,track_submissions=not args.api)
                     recovery_ready=False
-                    repair_at=0
                     while True:
                         check_stop()
                         for preserved in preserved_guards:
@@ -981,16 +1013,14 @@ def main():
                             recovery_ready=False
                         ready=guard.ready()
                         health_state(guard.page_health(ready,prepared_id))
-                        if ready:
-                            repair_at=0
-                        else:
+                        if not ready:
                             on_mwg=page.url.split('?',1)[0].split('#',1)[0].rstrip('/')==URL
-                            if on_mwg and not prepared_id and time.monotonic()>=repair_at:
+                            if on_mwg and not prepared_id:
                                 try:
                                     ready=recover_idle_controls(page,guard,prepared_id)
+                                    if ready:refresh_at=time.monotonic()+300
                                 except Exception:
                                     ready=False
-                                repair_at=time.monotonic()+300
                             health_state(guard.page_health(ready,prepared_id))
                         job=claim_with_reconnect({'preview_protocol':1,'prepared_id':prepared_id,'batch_protocol':1,
                                                  'reset_protocol':1,'recovery_protocol':int(not args.api),
@@ -1024,7 +1054,7 @@ def main():
                             else:
                                 prepared_id=process(page,job,prepared_id,guard=guard)
                             refresh_at=time.monotonic()+300
-                        elif not prepared_id and time.monotonic()>=refresh_at:
+                        elif ready and not prepared_id and time.monotonic()>=refresh_at:
                             try:
                                 health_state('loading')
                                 refresh_idle(page,guard=guard)
