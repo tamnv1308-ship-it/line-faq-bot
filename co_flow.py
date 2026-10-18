@@ -421,21 +421,41 @@ class Queue:
                 "SELECT j.id,j.state FROM jobs j JOIN preview_replies p ON p.job_id=j.id WHERE p.received<?",
                 (time.time()-45,))]
 
-    def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False, playful_cancel=False):
+    def confirm(self, jid, owner, chat, cancel=False, reply_token=None, require_online=False, playful_cancel=False, button_result=None):
         def cancelled(message):
             return message+'\n\n'+secrets.choice(CANCEL_QUIPS) if cancel and playful_cancel else message
+        def button(status, text, retire=False):
+            if button_result is not None:
+                button_result.update(status=status,text=text,retire=retire)
         with self.db() as db:
             expire_drafts(db,time.time(),PRIVATE_CO_OWNER)
-            if require_online and not cancel:
+            if require_online and not cancel and button_result is None:
                 reason=self.unavailable(db,owner)
                 if reason:raise BotUnavailable(reason)
             job = db.execute('SELECT * FROM jobs WHERE id=?'+('' if owner==PRIVATE_CO_OWNER else ' AND owner=? AND chat=?'),(jid,) if owner==PRIVATE_CO_OWNER else (jid,owner,chat)).fetchone()
             if not job:
+                button('denied','Chỉ người gửi hoặc Tâm được thao tác yêu cầu này.')
                 return 'Không tìm thấy yêu cầu của bạn trong cuộc chat này.'
             if not cancel and owner==PRIVATE_CO_OWNER and job['owner']!=PRIVATE_CO_OWNER and not db.execute('SELECT enabled FROM co_control WHERE id=1').fetchone()['enabled']:
+                button('denied','Bot đang ở chế độ chỉ xử lý yêu cầu của Tâm.')
                 return 'Đang ở chế độ chỉ xử lý yêu cầu của Tâm 258330. Dùng !bot on để xác nhận yêu cầu của người khác.'
             if job['state']=='expired':
+                button('expired','Yêu cầu đã hết hạn và tự hủy.',True)
                 return cancelled(f'Xác nhận {jid} đã hết hạn. Yêu cầu đã tự hủy; chưa tạo CO.\n'+lock_notice(db,job['owner'],time.time(),PRIVATE_CO_OWNER))
+            if button_result is not None:
+                # The state transition and this guard share the same DB transaction.
+                # A second click (including the opposite button) cannot undo the first.
+                if job['state'] in {'preview_queued','preview_running'}:
+                    button('waiting','Đang kiểm tra MWG; chờ bản xác nhận mới.')
+                    return 'Chưa có bản xác nhận từ MWG.'
+                if job['state']!='draft':
+                    button('already','Thao tác đã được ghi nhận hoặc yêu cầu đã kết thúc.',True)
+                    return 'Yêu cầu đã được xử lý; nút này không thực hiện thêm thao tác.'
+                if require_online and not cancel:
+                    reason=self.unavailable(db,owner)
+                    if reason:
+                        button('unavailable',reason)
+                        raise BotUnavailable(reason)
             if cancel and job['state'] in {'queued','preview_queued','verified_queued'}:
                 db.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=?",(time.time(),jid))
                 return cancelled(f'Đã hủy yêu cầu chờ {jid}; Mac sẽ không tạo yêu cầu này.')
@@ -448,6 +468,7 @@ class Queue:
             state = 'cancelled' if cancel else ('verified_queued' if json.loads(job['payload']).get('product_name') else 'queued')
             db.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(state,time.time(),jid))
             observe.record(db,jid,'cancelled' if cancel else 'confirmed',key=job['created'])
+            button('accepted','Đã hủy yêu cầu.' if cancel else 'Đã xác nhận. Bot đang xử lý; không cần bấm lại.',True)
             if not cancel and reply_token and job['chat']==chat:
                 db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
                 db.execute('INSERT INTO preview_replies(job_id,token,received) VALUES(?,?,?)',(jid,reply_token,time.time()))
@@ -858,6 +879,7 @@ def install(app, reply, push, default_users=(), requester_name=None):
                        duplicate_filter_version=DUPLICATE_FILTER_VERSION,
                        row_validation_version=ROW_VALIDATION_VERSION, row_result_version=1,
                        form_assist_version=co_form_assist.VERSION, form_assist_enabled=co_form_assist.enabled(),
+                       telegram_button_once_version=1,
                        late_result_version=LATE_RESULT_VERSION, bot_off_notice_version=3,
                        owner_only_off_version=1, intake_mode='normal' if control['enabled'] else 'owner_only',
                        owner_accepting=health['mwg_ready'],observability_version=observe.VERSION,
@@ -1078,8 +1100,10 @@ def install(app, reply, push, default_users=(), requester_name=None):
                     if message is not None:
                         reply(event.reply_token,message)
                 else:
-                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True,playful_cancel=command.upper()=='HUY')
-                    if message is not None:
+                    button_result={} if getattr(event,'co_button',False) else None
+                    if button_result is not None:event.co_button_result=button_result
+                    message=queue.confirm(jid.strip(),owner,chat,command.upper()!='XACNHAN',reply_token=event.reply_token if command.upper()=='XACNHAN' else None,require_online=True,playful_cancel=command.upper()=='HUY',button_result=button_result)
+                    if message is not None and (button_result is None or button_result.get('status')=='accepted'):
                         reply(event.reply_token,message)
         except RequesterLocked as error:
             reply(event.reply_token,str(error))
@@ -1088,7 +1112,9 @@ def install(app, reply, push, default_users=(), requester_name=None):
         except DuplicateRequest as error:
             reply(event.reply_token,str(error))
         except BotUnavailable as error:
-            reply(event.reply_token,str(error))
+            if getattr(event,'co_button',False):
+                event.co_button_result={'status':'unavailable','text':str(error),'retire':False}
+            else:reply(event.reply_token,str(error))
         except ValueError as error:
             reply(event.reply_token,f'Form chưa hợp lệ: {error}\nVui lòng sửa và gửi lại.')
         return True

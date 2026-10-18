@@ -141,7 +141,10 @@ class TelegramTests(unittest.TestCase):
                 self.assertEqual(self.jobs()[0]['state'],'draft')
         self.send('XACNHAN '+job['id'],uid=99,callback=True)
         self.assertEqual(self.jobs()[0]['state'],'verified_queued')
+        # The old confirmation keyboard is single-use, even for the owner.
         self.send('HUY '+job['id'],uid=1,callback=True)
+        self.assertEqual(self.jobs()[0]['state'],'verified_queued')
+        self.send('HUY '+job['id'],uid=1)
         self.assertEqual(self.jobs()[0]['state'],'cancelled')
 
     def test_native_identity_survives_link_and_self_cancel(self):

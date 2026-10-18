@@ -70,6 +70,11 @@ def schema(db):
       CREATE TABLE IF NOT EXISTS co_telegram_seen_groups (
         bot_id TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL,
         seen REAL NOT NULL, PRIMARY KEY(bot_id,chat_id));
+      CREATE TABLE IF NOT EXISTS co_telegram_co_buttons (
+        bot_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id TEXT NOT NULL,
+        job_id TEXT NOT NULL, retired INTEGER NOT NULL, retry_at REAL NOT NULL,
+        created REAL NOT NULL, PRIMARY KEY(bot_id,chat_id,message_id));
+      CREATE INDEX IF NOT EXISTS co_telegram_co_buttons_due ON co_telegram_co_buttons(bot_id,retired,retry_at);
     ''')
 
 
@@ -85,7 +90,7 @@ class Client:
         if not cfg['ready']:
             raise TelegramError()
         # Only fixed methods supplied by our own code reach this function.
-        if method not in {'sendMessage', 'sendPhoto', 'answerCallbackQuery', 'getChatMember',
+        if method not in {'sendMessage', 'sendPhoto', 'answerCallbackQuery', 'editMessageReplyMarkup', 'getChatMember',
                           'getMe', 'getWebhookInfo', 'setWebhook', 'setMyCommands'}:
             raise ValueError('Unsupported Telegram method')
         req = Request('https://api.telegram.org/bot'+cfg['token']+'/'+method,
@@ -227,7 +232,60 @@ class Bridge:
             with self.queue.db() as db:
                 db.execute("UPDATE co_telegram_deliveries SET state='sent',message_id=?,updated=? WHERE delivery_key=?",
                            (str(result['message_id']),time.time(),digest))
+                if not photo:
+                    commands={b['callback_data'] for b in buttons}
+                    jid=next((c.split()[1] for c in commands if re.fullmatch(r'XACNHAN [0-9a-f]{10}',c)
+                              and 'HUY '+c.split()[1] in commands),None)
+                    if jid:self.remember_co_buttons(db,chat[3:],str(result['message_id']),jid)
         return True
+
+    def remember_co_buttons(self, db, chat, message, jid):
+        db.execute('INSERT INTO co_telegram_co_buttons VALUES(?,?,?,?,0,0,?) '
+                   'ON CONFLICT(bot_id,chat_id,message_id) DO NOTHING',
+                   (settings()['bot_id'],str(chat),str(message),jid,time.time()))
+
+    def retire_co_buttons(self, job_id=None):
+        """Remove used/expired keyboards; never modify jobs or call MWG."""
+        cfg=settings()
+        if not cfg['ready']:return
+        now=time.time()
+        with self.queue.db() as db:
+            rows=[dict(r) for r in db.execute('''SELECT b.* FROM co_telegram_co_buttons b
+                LEFT JOIN jobs j ON j.id=b.job_id
+                WHERE b.bot_id=? AND b.retired=0 AND b.retry_at<=? AND (?='' OR b.job_id=?) AND
+                  (j.id IS NULL OR j.state NOT IN ('draft','preview_queued','preview_running') OR
+                   (j.state='draft' AND j.created<=? - CASE WHEN j.result='MWG_PREVIEW' AND j.notified=0 THEN 300 ELSE 60 END))
+                ORDER BY b.created LIMIT 5''',(cfg['bot_id'],now,job_id or '',job_id or '',now))]
+            for row in rows:
+                db.execute('UPDATE co_telegram_co_buttons SET retry_at=? WHERE bot_id=? AND chat_id=? AND message_id=?',
+                           (now+30,row['bot_id'],row['chat_id'],row['message_id']))
+        for row in rows:
+            retired=True;retry_at=0
+            try:
+                self.client.call('editMessageReplyMarkup',{'chat_id':row['chat_id'],
+                    'message_id':int(row['message_id']),'reply_markup':{'inline_keyboard':[]}})
+            except TelegramError as error:
+                # Already edited/deleted/forbidden messages cannot be fixed by replay.
+                retired=error.code in (400,403,404)
+                retry_at=time.time()+max(30,min(3600,int(error.retry_after or 0)))
+            with self.queue.db() as db:
+                db.execute('UPDATE co_telegram_co_buttons SET retired=?,retry_at=? WHERE bot_id=? AND chat_id=? AND message_id=?',
+                           (int(retired),retry_at,row['bot_id'],row['chat_id'],row['message_id']))
+
+    def finish_co_button(self,event,callback,message):
+        outcome=getattr(event,'co_button_result',{})
+        try:
+            self.client.call('answerCallbackQuery',{'callback_query_id':callback['id'],
+                'text':outcome.get('text','Chưa thực hiện được thao tác. Vui lòng kiểm tra trạng thái yêu cầu.')[:190],
+                'show_alert':outcome.get('status') in {'denied','unavailable'},'cache_time':0})
+        except TelegramError:pass
+        if outcome.get('retire'):
+            mid=message.get('message_id')
+            if type(mid) is not int or mid<=0:return
+            # Only a permission-checked queue outcome can register an old message.
+            with self.queue.db() as db:
+                self.remember_co_buttons(db,message['chat']['id'],mid,event.message.text.split()[1])
+            self.retire_co_buttons(event.message.text.split()[1])
 
     def reply(self, token, text, photo=False):
         match = re.fullmatch(r'tgr:(-?[1-9][0-9]*):([0-9]+)', str(token))
@@ -262,8 +320,9 @@ class Bridge:
         if callback:
             if str(message.get('from',{}).get('id'))!=cfg['bot_id']:return
             if not re.fullmatch(r'(?:XACNHAN|HUY) [0-9a-f]{10}|!gom(?: [a-z0-9]+)*',text):return
-            try:self.client.call('answerCallbackQuery',{'callback_query_id':callback['id']})
-            except TelegramError:pass
+            if not re.fullmatch(r'(?:XACNHAN|HUY) [0-9a-f]{10}',text):
+                try:self.client.call('answerCallbackQuery',{'callback_query_id':callback['id']})
+                except TelegramError:pass
         elif not text:return
         stamp=message.get('date')
         if not callback and (type(stamp) is not int or stamp>time.time()+60 or time.time()-stamp>300):
@@ -303,9 +362,11 @@ class Bridge:
         event=SimpleNamespace(source=source,delivery_chat='tg:'+str(cid),platform='telegram',
             requester_name=(name or 'Telegram '+tid)[:200],message=SimpleNamespace(text=text,id=str(message.get('message_id',0))),
             webhook_event_id='telegram:'+cfg['bot_id']+':'+str(update['update_id']),reply_token=token,
-            timestamp=int((stamp if not callback else time.time())*1000))
+            timestamp=int((stamp if not callback else time.time())*1000),
+            co_button=bool(callback and re.fullmatch(r'(?:XACNHAN|HUY) [0-9a-f]{10}',text)))
         for handler in handlers:
             if handler(event):break
+        if event.co_button:self.finish_co_button(event,callback,message)
 
     def drain(self, handlers, logger):
         cfg=settings()
@@ -328,6 +389,7 @@ class Bridge:
 
     def cleanup(self):
         with self.queue.db() as db:
+            db.execute('DELETE FROM co_telegram_co_buttons WHERE created<?',(time.time()-30*86400,))
             db.execute('DELETE FROM co_telegram_seen_groups WHERE seen<?',(time.time()-3*86400,))
             db.execute('DELETE FROM co_telegram_link_requests WHERE expires<?',(time.time(),))
             db.execute("DELETE FROM co_telegram_updates WHERE state='done' AND received<?",(time.time()-30*86400,))
