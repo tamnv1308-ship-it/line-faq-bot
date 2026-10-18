@@ -18,6 +18,7 @@ from mwg_submit_capture import CreateCapture, merge_results
 URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
 TEMPLATE = Path(__file__).resolve().parent / 'templates' / 'StoreChangeOrderTGDD_template.xlsx'
+SLOW_LOADING_SECONDS = 15
 RUNTIME = None
 TELEMETRY = None
 
@@ -242,6 +243,8 @@ class RecoveryGuard:
         self.track_submissions=track_submissions
         self.pending=set()
         self.last_reason=None
+        self.loading_since=None
+        self.repair_failed=False
         # Historical unknown jobs stay protected by the server's stock checks.
         # Only an uncertain submission on THIS page must prevent page repair.
         self.uncertain_job=None
@@ -256,10 +259,28 @@ class RecoveryGuard:
         self.pending.discard(request)
     def ready(self):
         reason=self.readiness_reason()
+        if reason is None:
+            self.loading_since=None
+            self.repair_failed=False
         if reason!=self.last_reason:
             if reason:print('MWG chưa sẵn sàng: '+reason,flush=True)
             self.last_reason=reason
         return reason is None
+    def page_health(self, ready, prepared_id=None):
+        """Describe loading without treating a deferred repair as a failure."""
+        if ready:
+            self.loading_since=None
+            self.repair_failed=False
+            return 'awaiting_confirmation' if prepared_id else 'ready'
+        if self.page.is_closed():return 'blocked'
+        if self.page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
+            self.loading_since=None
+            return 'login'
+        if self.uncertain_job is not None or self.late_submissions or self.repair_failed:
+            return 'blocked'
+        now=time.monotonic()
+        if self.loading_since is None:self.loading_since=now
+        return 'loading_slow' if now-self.loading_since>=SLOW_LOADING_SECONDS else 'loading'
     def readiness_reason(self):
         page=self.page
         if self.uncertain_job is not None or self.late_submissions:
@@ -827,6 +848,7 @@ def recover_idle_controls(page, guard, prepared_id=None):
     if any(states.get(k,0) for k in ('draft','preview_running','running','submitting')):
         return False
     if not guard.track_submissions and states.get('unknown',0):return False
+    guard.repair_failed=False
     for attempt in range(5):
         check_stop()
         if page.is_closed() or page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
@@ -844,6 +866,7 @@ def recover_idle_controls(page, guard, prepared_id=None):
             print('MWG chưa sẵn sàng; tải lại lượt '+str(attempt+2)+'/5.',flush=True)
             page.reload(wait_until='domcontentloaded',timeout=15000)
     print('MWG chưa sẵn sàng sau 5 lượt. Tạm ngừng nhận CO; giữ Chrome để kiểm tra.',flush=True)
+    guard.repair_failed=True
     capture_failure(page,'readiness-error')
     return False
 
@@ -957,20 +980,18 @@ def main():
                             guard=RecoveryGuard(page,track_submissions=not args.api)
                             recovery_ready=False
                         ready=guard.ready()
+                        health_state(guard.page_health(ready,prepared_id))
                         if ready:
-                            health_state('awaiting_confirmation' if prepared_id else 'ready')
                             repair_at=0
                         else:
                             on_mwg=page.url.split('?',1)[0].split('#',1)[0].rstrip('/')==URL
-                            health_state('loading' if on_mwg else 'login')
                             if on_mwg and not prepared_id and time.monotonic()>=repair_at:
                                 try:
                                     ready=recover_idle_controls(page,guard,prepared_id)
                                 except Exception:
                                     ready=False
                                 repair_at=time.monotonic()+300
-                            if ready:health_state('ready')
-                            elif on_mwg:health_state('blocked')
+                            health_state(guard.page_health(ready,prepared_id))
                         job=claim_with_reconnect({'preview_protocol':1,'prepared_id':prepared_id,'batch_protocol':1,
                                                  'reset_protocol':1,'recovery_protocol':int(not args.api),
                                                  'page_ready':recovery_ready and guard.ready()})

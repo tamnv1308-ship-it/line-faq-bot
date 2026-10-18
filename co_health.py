@@ -2,11 +2,12 @@
 import math
 import time
 
-READINESS_VERSION = 1
+READINESS_VERSION = 2
 PROGRESS_TTL = 60
 LABELS = {
     'ready': 'Sẵn sàng', 'processing': 'Đang xử lý',
     'awaiting_confirmation': 'Đang chờ xác nhận', 'loading': 'Đang tải MWG',
+    'loading_slow': 'MWG tải chậm / đang chờ dữ liệu',
     'login': 'Chờ đăng nhập MWG', 'blocked': 'Bị kẹt / cần kiểm tra',
     'reconnecting': 'Đang kết nối lại', 'stopping': 'Đang dừng',
     'stopped': 'Đã tắt', 'unverified': 'Chưa kiểm tra MWG',
