@@ -699,12 +699,16 @@ def process(page, job, prepared_id=None, guard=None):
             except Exception:
                 pass
         if submitting:
+            if creation is not None:
+                stage=('create_no_request_observed' if not creation.requests else
+                       'create_response_unresolved' if creation.done else 'create_response_pending')
+                progress(job,stage)
             for outcome in outcomes:
                 if not outcome['co'] and not outcome['error']:
                     outcome['error']='Chưa rõ kết quả; cần đối soát MWG. '+message[:250]
                     outcome['state']='unknown'
             report(job,'unknown',json.dumps(outcomes,ensure_ascii=False))
-            if guard is not None and creation is not None and creation.requests:
+            if guard is not None and creation is not None:
                 guard.late_submissions.append((job,creation,outcomes))
                 creation=None  # Keep observing this exact request after the 15s notice.
         else:
@@ -758,7 +762,7 @@ def ensure_browser(pw, context, page, background=False):
             raise
         return open_browser(pw, background=background)
 
-def find_idle_mwg_page(context, page, guard, prepared_id=None):
+def find_idle_mwg_page(context, page, guard, prepared_id=None, excluded_pages=()):
     """Follow a login-created tab only when no current CO state can be lost."""
     if prepared_id or guard.uncertain_job is not None or guard.late_submissions:
         return page
@@ -769,7 +773,8 @@ def find_idle_mwg_page(context, page, guard, prepared_id=None):
                 candidate.url.split('?',1)[0].split('#',1)[0].rstrip('/')==URL)
     try:
         if on_mwg(page):return page
-        candidates=[candidate for candidate in context.pages if candidate is not page and on_mwg(candidate)]
+        candidates=[candidate for candidate in context.pages if candidate is not page
+                    and not any(candidate is excluded for excluded in excluded_pages) and on_mwg(candidate)]
         # Multiple open CO forms are ambiguous; never pick a form arbitrarily.
         if len(candidates)!=1:return page
         states=api('status',None)['states']
@@ -938,7 +943,8 @@ def main():
                             recovery_ready=False
                             print('Giữ trang CO chưa rõ kết quả; mở trang riêng cho yêu cầu khác, không tạo lại CO cũ.',flush=True)
                         context,page=ensure_browser(pw,context,page,background=args.background)
-                        page=find_idle_mwg_page(context,page,guard,prepared_id)
+                        page=find_idle_mwg_page(context,page,guard,prepared_id,
+                                                excluded_pages=[saved.page for saved in preserved_guards])
                         if page.url in ('about:blank','chrome://newtab/'):
                             try:
                                 health_state('loading')

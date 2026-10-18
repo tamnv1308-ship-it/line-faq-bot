@@ -78,6 +78,23 @@ class LoginTabTests(unittest.TestCase):
         with patch.object(worker, 'api', side_effect=TimeoutError):
             self.assertIs(worker.find_idle_mwg_page(self.context, self.current, self.guard), self.current)
 
+    def test_never_reclaims_preserved_submission_as_login_tab(self):
+        self.current.url='about:blank'
+        with patch.object(worker,'api',return_value={'states':{'unknown':1}}):
+            chosen=worker.find_idle_mwg_page(self.context,self.current,self.guard,
+                                            excluded_pages=[self.target])
+        self.assertIs(chosen,self.current)
+        self.target.reload.assert_not_called();self.target.goto.assert_not_called()
+
+    def test_login_handoff_ignores_old_submission_but_accepts_new_login_tab(self):
+        login_target=self.page(worker.URL)
+        self.context.pages.append(login_target)
+        with patch.object(worker,'api',return_value={'states':{'unknown':1}}):
+            chosen=worker.find_idle_mwg_page(self.context,self.current,self.guard,
+                                            excluded_pages=[self.target])
+        self.assertIs(chosen,login_target)
+        self.target.reload.assert_not_called();self.target.close.assert_not_called()
+
     def test_unknown_api_submission_keeps_existing_form(self):
         self.guard.track_submissions = False
         self.assertIs(self.choose({'unknown': 1}), self.current)
