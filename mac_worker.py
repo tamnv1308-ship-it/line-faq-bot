@@ -262,6 +262,8 @@ class RecoveryGuard:
         return reason is None
     def readiness_reason(self):
         page=self.page
+        if self.uncertain_job is not None or self.late_submissions:
+            return 'Đang chờ đối soát phản hồi tạo CO; giữ nguyên trang.'
         try:
             if page.is_closed():return 'Cửa sổ đã đóng.'
             if page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL:
@@ -727,7 +729,7 @@ def refresh_idle(page, guard=None):
     # Preserve the current result page when reconciliation is still required.
     if (ROOT/'pending.json').exists():
         return False
-    if guard is not None and guard.uncertain_job is not None:
+    if guard is not None and (guard.uncertain_job is not None or guard.late_submissions or guard.pending):
         return False
     states=api('status',None)['states']
     if any(states.get(state,0) for state in ('draft','queued','verified_queued','preview_queued','running','submitting','preview_running')):
@@ -808,7 +810,7 @@ def start_heartbeat():
 
 def recover_idle_controls(page, guard, prepared_id=None):
     # A readiness repair is never allowed to erase a preview or an uncertain result.
-    if prepared_id or guard.uncertain_job is not None or (ROOT/'pending.json').exists():return False
+    if prepared_id or guard.uncertain_job is not None or guard.late_submissions or guard.pending or (ROOT/'pending.json').exists():return False
     states=api('status',None)['states']
     if any(states.get(k,0) for k in ('draft','preview_running','running','submitting')):
         return False
@@ -825,6 +827,7 @@ def recover_idle_controls(page, guard, prepared_id=None):
             except Exception as error:
                 print('Chưa chuẩn bị được thương hiệu MWG ('+type(error).__name__+').',flush=True)
         if guard.wait_ready(timeout=7):return True
+        if guard.pending or guard.late_submissions or guard.uncertain_job is not None:return False
         if attempt<4:
             print('MWG chưa sẵn sàng; tải lại lượt '+str(attempt+2)+'/5.',flush=True)
             page.reload(wait_until='domcontentloaded',timeout=15000)
