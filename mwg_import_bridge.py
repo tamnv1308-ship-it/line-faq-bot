@@ -4,12 +4,13 @@ Never calls a CO creation endpoint. Fallback is allowed only before an upload.
 The normal worker still verifies/accepts the popup and checks the main table.
 """
 import json
+import base64
 import uuid
 from pathlib import Path
 
 from mwg_import_api import IMPORT_URL, ORIGIN, match_import_rows
 
-VERSION = 1
+VERSION = 2
 IMPORT_TIMEOUT_MS = 15000
 
 
@@ -70,6 +71,56 @@ ABORT = r'''id => {
   current.widget.trigger('error',{...current.event,XMLHttpRequest:{status:0}});
 }'''
 
+# Use the browser's own authenticated, same-origin connection. Node's request
+# client has a separate network/TLS stack and does not send browser-origin headers.
+# Exactly one import request; a timeout/redirect/network failure is never replayed.
+SEND = r'''async arg => {
+  const current=window.__taoImportBridgeV1;
+  const el=document.querySelector('#fileUpload');
+  if (!current || current.id!==arg.id || !el ||
+      window.jQuery(el).data('kendoUpload')!==current.widget ||
+      new URL(arg.url).origin!==location.origin)
+    return {error:'page_changed'};
+  const raw=atob(arg.file), bytes=new Uint8Array(raw.length);
+  for (let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+  const form=new FormData();
+  for (const [key,value] of Object.entries(arg.data)) form.append(key,value);
+  form.append('fileUpload',new Blob([bytes],{type:arg.mime}),arg.name);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),arg.timeout);
+  try {
+    const response=await fetch(arg.url,{method:'POST',body:form,headers:arg.headers,
+      credentials:'same-origin',mode:'same-origin',redirect:'error',
+      signal:controller.signal});
+    if (response.status!==200) return {status:response.status};
+    try {return {status:200,body:await response.json()};}
+    catch(error) {return {error:controller.signal.aborted?'timeout':'invalid_json'};}
+  } catch(error) {
+    return {error:controller.signal.aborted?'timeout':'network'};
+  } finally {clearTimeout(timer);}
+}'''
+
+ERROR_LABELS = {
+    'page_changed':'Trang nhập MWG đã thay đổi',
+    'timeout':'MWG chưa trả kết quả nhập file sau 15 giây',
+    'network':'Kết nối nhập file từ Chrome tới MWG bị ngắt',
+    'invalid_json':'MWG chưa trả dữ liệu nhập file hợp lệ; kiểm tra đăng nhập',
+}
+
+
+def error_code(error):
+    # Only fixed labels leave this boundary; never print raw errors/URLs/headers.
+    text=str(error).lower()
+    for code,markers in (
+        ('browser_closed',('target closed','has been closed','targetclosed')),
+        ('timeout',('timeout','timed out')),
+        ('page_changed',('execution context was destroyed','page changed','context was destroyed')),
+        ('certificate',('certificate','ssl','unable_to_verify')),
+        ('network',('net::','enotfound','econnreset','fetch failed','failed to fetch')),
+    ):
+        if any(marker in text for marker in markers):return code
+    return 'browser_error'
+
 
 def parameters(value, status_id):
     if not isinstance(value, dict) or not isinstance(value.get('data'), dict):
@@ -121,20 +172,29 @@ def import_preview(page, output, records, status_id, on_start=lambda:None):
     if not isinstance(capability,dict) or capability.get('url','').lower()!=IMPORT_URL.lower():
         raise BridgeUnavailable('Thành phần nhập file chưa tương thích.')
     attempt=uuid.uuid4().hex
+    phase='prepare'
     try:
         on_start()
         context=page.evaluate(BEGIN,{'id':attempt,'url':capability['url'],'name':path.name,'size':path.stat().st_size})
         data,headers=parameters(context,status_id)
-        response=page.context.request.post(IMPORT_URL,multipart=dict(data,fileUpload={
-            'name':path.name,'mimeType':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'buffer':path.read_bytes()}),headers=headers,timeout=IMPORT_TIMEOUT_MS,max_redirects=0,max_retries=0)
-        try:
-            if response.status!=200:raise ValueError('Nhập file API MWG lỗi HTTP '+str(response.status)+'.')
-            try:body=response.json()
-            except Exception:raise ValueError('MWG chưa trả dữ liệu nhập file hợp lệ; kiểm tra phiên đăng nhập.') from None
-            body=validate_rows(body,records,status_id)
-        finally:
-            response.dispose()
+        phase='upload'
+        response=page.evaluate(SEND,{'id':attempt,'url':IMPORT_URL,'data':data,'headers':headers,
+            'file':base64.b64encode(path.read_bytes()).decode('ascii'),'name':path.name,
+            'mime':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'timeout':IMPORT_TIMEOUT_MS})
+        if not isinstance(response,dict):raise ValueError('MWG chưa trả kết quả nhập file hợp lệ; chưa tạo CO.')
+        code=response.get('error')
+        if code:
+            code=code if code in ERROR_LABELS else 'network'
+            print('MWG import diagnostic: '+json.dumps({'phase':phase,'code':code}),flush=True)
+            raise ValueError(ERROR_LABELS[code]+'; chưa tạo CO.')
+        status=response.get('status')
+        if type(status) is not int or status!=200:
+            status=str(status) if type(status) is int else 'không rõ'
+            raise ValueError('Nhập file API MWG lỗi HTTP '+status+'; chưa tạo CO.')
+        phase='validate'
+        body=validate_rows(response.get('body'),records,status_id)
+        phase='apply'
         page.evaluate(FINISH,{'id':attempt,'body':body})
         return ImportResponse(body)
     except Exception as error:
@@ -142,4 +202,6 @@ def import_preview(page, output, records, status_id, on_start=lambda:None):
         except Exception:pass
         # No retries/fallback after BEGIN: never hide an uncertain import outcome.
         if isinstance(error,ValueError):raise
-        raise RuntimeError('Không hoàn tất nhập file API MWG ('+type(error).__name__+'); chưa tạo CO.') from None
+        code=error_code(error)
+        print('MWG import diagnostic: '+json.dumps({'phase':phase,'code':code}),flush=True)
+        raise RuntimeError('Không hoàn tất nhập file API MWG ['+phase+'/'+code+']; chưa tạo CO.') from None

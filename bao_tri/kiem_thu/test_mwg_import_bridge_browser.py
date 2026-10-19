@@ -4,7 +4,7 @@ Only a loopback server is reachable. No worker queue, login or real CO endpoint.
 Set CO_IMPORT_BROWSER_FIXTURES to a directory containing jquery.js, kendo.js
 and controller.js (the observed public MWG controller) to run this contract test.
 """
-import json,os,tempfile,threading,unittest
+import json,os,tempfile,threading,time,unittest
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -50,8 +50,18 @@ class BrowserBridgeTests(unittest.TestCase):
     calls.append(self.path)
     raw=self.rfile.read(int(self.headers.get('Content-Length',0)))
     if self.path!='/StoreChangeOrderManually/ImportExcel':self.send_error(403);return
+    # Require real browser session and origin headers, unlike the old Node request.
+    if (self.headers.get('Origin')!=origin or
+        self.headers.get('Referer')!=origin+'/storechangeordermanually' or
+        self.headers.get('Cookie')!='fixture_session=authenticated'):
+     self.send_error(403);return
     self.server.upload=raw;self.server.token=self.headers.get('X-XSRF-TOKEN')
-    self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(response).encode())
+    scenario=getattr(self.server,'scenario','ok')
+    if scenario=='timeout':time.sleep(.3)
+    self.send_response(401 if scenario=='unauthorized' else 200)
+    self.send_header('Content-Type','application/json');self.end_headers()
+    try:self.wfile.write(b'not-json' if scenario=='invalid_json' else json.dumps(response).encode())
+    except (BrokenPipeError,ConnectionResetError):pass
   server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
   thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
   origin='http://127.0.0.1:'+str(server.server_port)
@@ -61,6 +71,7 @@ class BrowserBridgeTests(unittest.TestCase):
     browser=pw.chromium.launch(channel='chrome',headless=True)
     try:
      page=browser.new_page();page.route('**/*',lambda r:r.continue_() if r.request.url.startswith(origin+'/') else r.abort())
+     page.context.add_cookies([{'name':'fixture_session','value':'authenticated','url':origin}])
      page.goto(origin+'/storechangeordermanually');errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
      with patch.object(b,'ORIGIN',origin),patch.object(b,'IMPORT_URL',origin+'/StoreChangeOrderManually/ImportExcel'),patch.object(w,'progress'),patch.dict(os.environ,{'CO_IMPORT_TRANSPORT':'auto'}):
       responses=[];popup=w.import_with_retry(page,{'id':'a'*10,'mode':'preview','payload':dict(record(),status='Mới')},output,[],responses=responses,records=[record()])
@@ -75,5 +86,19 @@ class BrowserBridgeTests(unittest.TestCase):
      self.assertEqual(server.token,'offline-fixture-token');self.assertIn(b'name="fileUpload"',server.upload)
      self.assertEqual(errors,[])
      self.assertTrue(page.get_by_role('button',name='Tạo CO').is_disabled())
+     # Failed uploads must clear the loader, open no popup, and never replay.
+     for scenario in ('unauthorized','invalid_json','timeout','network'):
+      server.scenario=scenario
+      page.goto(origin+'/storechangeordermanually')
+      before=len(calls)
+      if scenario=='network':page.route('**/ImportExcel',lambda route:route.abort())
+      with patch.object(b,'ORIGIN',origin),patch.object(b,'IMPORT_URL',origin+'/StoreChangeOrderManually/ImportExcel'),patch.object(b,'IMPORT_TIMEOUT_MS',100 if scenario=='timeout' else 15000):
+       with self.assertRaises(ValueError):b.import_preview(page,output,[record()],'1')
+      self.assertEqual(len(calls),before+(0 if scenario=='network' else 1))
+      self.assertEqual(page.locator('body').get_attribute('data-loading'),'false')
+      self.assertFalse(page.locator('#popup').is_visible())
+      self.assertEqual(page.locator('#main td').count(),0)
+      self.assertTrue(page.get_by_role('button',name='Tạo CO').is_disabled())
+      self.assertEqual(page.evaluate('window.__taoImportBridgeV1===undefined'),True)
     finally:browser.close()
   finally:server.shutdown();server.server_close();thread.join(timeout=2)

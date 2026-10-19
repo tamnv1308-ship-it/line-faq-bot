@@ -1,4 +1,4 @@
-import json,tempfile,unittest
+import base64,json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import MagicMock,patch
 import mac_worker as w
@@ -13,17 +13,16 @@ class BridgeTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   self.file=Path(self.tmp.name)/'fixture.xlsx';self.file.write_bytes(b'offline')
   self.page=MagicMock();self.page.url=b.ORIGIN+'/storechangeordermanually'
-  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),True]
-  self.response=self.page.context.request.post.return_value
-  self.response.status=200;self.response.json.return_value=body()
+  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),{'status':200,'body':body()},True]
  def run_import(self):return b.import_preview(self.page,self.file,[record()],'1')
  def test_one_import_no_create_reload_or_button(self):
   self.assertEqual(self.run_import().json(),body())
-  post=self.page.context.request.post;post.assert_called_once();args,kw=post.call_args
-  self.assertEqual(args,(b.IMPORT_URL,));self.assertEqual(kw['timeout'],15000)
-  self.assertEqual(kw['max_retries'],0);self.assertEqual(kw['max_redirects'],0)
-  self.assertEqual(kw['multipart']['fileUpload']['buffer'],b'offline')
-  self.response.dispose.assert_called_once();self.page.reload.assert_not_called();self.page.get_by_role.assert_not_called()
+  sends=[c for c in self.page.evaluate.call_args_list if c.args[0]==b.SEND]
+  self.assertEqual(len(sends),1);kw=sends[0].args[1]
+  self.assertEqual(kw['url'],b.IMPORT_URL);self.assertEqual(kw['timeout'],15000)
+  self.assertEqual(base64.b64decode(kw['file']),b'offline')
+  self.page.context.request.post.assert_not_called()
+  self.page.reload.assert_not_called();self.page.get_by_role.assert_not_called()
  def test_unsupported_component_sends_nothing(self):
   self.page.evaluate.side_effect=[None]
   with self.assertRaises(b.BridgeUnavailable):self.run_import()
@@ -45,18 +44,30 @@ class BridgeTests(unittest.TestCase):
    p=params();p['headers']['X-XSRF-TOKEN']=value
    with self.assertRaises(ValueError):b.parameters(p,'1')
  def test_timeout_not_retried_or_leaked(self):
-  self.page.context.request.post.side_effect=TimeoutError('secret headers')
+  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),TimeoutError('secret headers'),None]
   with self.assertRaises(RuntimeError) as cm:self.run_import()
-  self.assertNotIn('secret',str(cm.exception));self.page.context.request.post.assert_called_once()
+  self.assertNotIn('secret',str(cm.exception));self.page.context.request.post.assert_not_called()
+  self.assertEqual(sum(c.args[0]==b.SEND for c in self.page.evaluate.call_args_list),1)
   self.assertEqual(self.page.evaluate.call_args.args[0],b.ABORT)
  def test_http_error_not_applied(self):
-  self.response.status=401
+  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),{'status':401},None]
   with self.assertRaisesRegex(ValueError,'401'):self.run_import()
-  self.assertNotIn(b.FINISH,[c.args[0] for c in self.page.evaluate.call_args_list]);self.response.dispose.assert_called_once()
+  self.assertNotIn(b.FINISH,[c.args[0] for c in self.page.evaluate.call_args_list])
  def test_malformed_json_not_leaked(self):
-  self.response.json.side_effect=ValueError('private response')
+  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),{'error':'invalid_json'},None]
   with self.assertRaises(ValueError) as cm:self.run_import()
-  self.assertNotIn('private',str(cm.exception));self.response.dispose.assert_called_once()
+  self.assertNotIn('private',str(cm.exception))
+ def test_browser_timeout_network_page_change_never_retried(self):
+  for code in ('timeout','network','page_changed'):
+   with self.subTest(code=code):
+    self.page.reset_mock();self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),{'error':code},None]
+    with self.assertRaises(ValueError):self.run_import()
+    self.assertEqual(sum(c.args[0]==b.SEND for c in self.page.evaluate.call_args_list),1)
+    self.assertNotIn(b.FINISH,[c.args[0] for c in self.page.evaluate.call_args_list])
+    self.page.reload.assert_not_called();self.page.context.request.post.assert_not_called()
+ def test_diagnostics_do_not_expose_raw_exception(self):
+  for text,code in [('SSL certificate secret_cookie','certificate'),('net::ERR_CONNECTION_RESET private_token','network'),('Target page has been closed secret','browser_closed'),('private headers body','browser_error')]:
+   self.assertEqual(b.error_code(RuntimeError(text)),code)
  def test_mismatched_rows_rejected(self):
   for field,value in [('FROMSTOREID',42),('PRODUCTID','0131491005416'),('QUANTITY',3),('INVENTORYSTATUSID',2),('NOTE','other'),('STORECHANGEORDERTYPEID',155),('ISURGENT',1)]:
    with self.subTest(field=field):
@@ -85,9 +96,10 @@ class BridgeTests(unittest.TestCase):
   data=body();data['Data']['Data']=json.loads(data['Data']['Data'])
   self.assertIsInstance(b.validate_rows(data,[record()],'1')['Data']['Data'],str)
  def test_bridge_changed_after_upload_not_resubmitted(self):
-  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),RuntimeError('changed'),None]
+  self.page.evaluate.side_effect=[{'url':b.IMPORT_URL},params(),{'status':200,'body':body()},RuntimeError('changed'),None]
   with self.assertRaises(RuntimeError):self.run_import()
-  self.page.context.request.post.assert_called_once()
+  self.page.context.request.post.assert_not_called()
+  self.assertEqual(sum(c.args[0]==b.SEND for c in self.page.evaluate.call_args_list),1)
 
 class WorkerChoiceTests(unittest.TestCase):
  def setUp(self):
