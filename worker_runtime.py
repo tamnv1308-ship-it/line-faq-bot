@@ -10,6 +10,10 @@ import time
 import uuid
 from pathlib import Path
 
+# This is a controller-health alarm, not the CO response deadline. Slow MWG
+# still pumps browser events and refreshes control progress below this limit.
+CONTROL_STALE_SECONDS = 60
+
 
 def atomic_json(path, value):
     tmp=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
@@ -52,6 +56,11 @@ class Runtime:
         self.mutex=threading.RLock()
         self.stop=threading.Event()
         self.state='loading';self.changed=time.monotonic()
+        self.control_at=self.changed
+        self.main_thread=threading.get_ident()
+        self.driver_probe=None
+        self.browser_generation=0
+        self.browser_connected=None
         self.old_handlers={}
         self.managed=os.environ.get('CO_MANAGED_WORKER')=='1'
 
@@ -79,11 +88,39 @@ class Runtime:
         with self.mutex:
             self.state='stopping' if self.stop.is_set() and state!='stopped' else state
             self.changed=time.monotonic()
+            if threading.get_ident()==self.main_thread:self.control_at=self.changed
+
+    def control_ok(self):
+        # Only a main-thread operation can prove the controller made progress.
+        if threading.get_ident()!=self.main_thread:return
+        with self.mutex:self.control_at=time.monotonic()
+
+    def watch_driver(self):
+        from driver_health import own_driver_probe
+        self.driver_probe=own_driver_probe()
+
+    def browser_opened(self):
+        with self.mutex:
+            self.browser_generation+=1
+            self.browser_connected=True
+            return self.browser_generation
+
+    def browser_closed(self,generation):
+        with self.mutex:
+            if generation==self.browser_generation:self.browser_connected=False
 
     def snapshot(self):
         self.stopping()
+        driver=self.driver_probe.sample() if self.driver_probe is not None else None
         with self.mutex:
-            return {'state':self.state,'progress_age_seconds':min(86400,max(0,time.monotonic()-self.changed))}
+            age=min(86400,max(0,time.monotonic()-self.control_at))
+            state=self.state
+            if state not in {'stopping','stopped'}:
+                if driver in {'dead','unverified'} or self.browser_connected is False:
+                    state='driver_error'
+                elif age>CONTROL_STALE_SECONDS and state not in {'login','reconnecting','unverified'}:
+                    state='control_stalled'
+            return {'state':state,'progress_age_seconds':age}
 
     def persist(self):
         value=self.snapshot()

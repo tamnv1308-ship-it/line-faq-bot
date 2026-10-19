@@ -48,7 +48,7 @@ class RuntimeTests(unittest.TestCase):
     def test_pulses_do_not_refresh_main_thread_progress(self):
         with patch('worker_runtime.time.monotonic',side_effect=[100,100,170]):
             runtime=Runtime(self.root);runtime.set('ready')
-            self.assertEqual(runtime.snapshot(),{'state':'ready','progress_age_seconds':70})
+            self.assertEqual(runtime.snapshot(),{'state':'control_stalled','progress_age_seconds':70})
 
     def test_stop_during_result_failure_preserves_outcome(self):
         runtime=Runtime(self.root);runtime.request_shutdown()

@@ -2,12 +2,14 @@
 import math
 import time
 
-READINESS_VERSION = 2
+READINESS_VERSION = 3
 PROGRESS_TTL = 60
 LABELS = {
     'ready': 'Sẵn sàng', 'processing': 'Đang xử lý',
     'awaiting_confirmation': 'Đang chờ xác nhận', 'loading': 'Đang tải MWG',
     'loading_slow': 'MWG tải chậm / đang chờ dữ liệu',
+    'driver_error': 'Điều khiển Chrome mất kết nối hoặc chưa xác minh được',
+    'control_stalled': 'Điều khiển bot không phản hồi; cần kiểm tra',
     'login': 'Chờ đăng nhập MWG', 'blocked': 'Bị kẹt / cần kiểm tra',
     'reconnecting': 'Đang kết nối lại', 'stopping': 'Đang dừng',
     'stopped': 'Đã tắt', 'unverified': 'Chưa kiểm tra MWG',

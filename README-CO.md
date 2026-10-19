@@ -103,3 +103,10 @@ Kết quả chưa gửi được lưu tại `.co-mac/pending.json`. LINE đượ
 `python -m unittest test_co_flow -v`: parser, giữ số 0 đầu mã sản phẩm, webhook trùng, xác nhận sai người/cuộc chat, hết hạn, nhận việc đồng thời, tác vụ gián đoạn và lưu kết quả qua lần mở DB mới.
 
 Đã thử API Flask cục bộ qua luồng xác nhận → nhận việc → checkpoint → kết quả → gửi một lần; đã thử điền đúng mẫu Excel. Đã kiểm tra chọn ba thương hiệu trên giao diện MWG thật. Chưa hoàn tất kiểm thử đầu cuối từ tin nhắn LINE tới một CO thật trên profile Chrome riêng của Mac; cần đăng nhập và thực hiện một yêu cầu được người dùng xác nhận.
+# Hộp thoại và tình trạng điều khiển Chrome
+
+- Một bộ xử lý hộp thoại tồn tại suốt phiên Chrome, bao gồm trang CO đang được giữ để đối soát. Thông báo đến muộn vẫn được xử lý; mỗi hộp thoại chỉ xử lý một lần. Chỉ chấp nhận thông báo `alert`; không đồng ý hộp thoại xác nhận, nhập liệu hay rời trang. Lỗi hộp thoại đã đóng được ghi bằng mã lỗi, không ghi nội dung tin nhắn vào log.
+- Heartbeat kiểm tra tiến trình driver thuộc đúng worker qua thông tin hệ điều hành, không gọi Playwright từ luồng nền. Driver mất kết nối/không xác minh được báo `driver_error`; vòng điều khiển không có tiến triển hơn 60 giây báo `control_stalled`. Heartbeat tự chạy không được làm mới mốc tiến triển.
+- 60 giây là ngưỡng phát hiện bộ điều khiển ngừng phản hồi, không phải thời gian chờ tạo CO. Thời gian nhận kết quả CO vẫn 30 giây tính từ click thật. Khi MWG chậm nhưng vòng điều khiển vẫn phản hồi, bot vẫn phân biệt là đang chờ MWG.
+- Các kiểm tra này chỉ báo tình trạng và ngăn nhận thêm khi bộ điều khiển lỗi; không tự đóng/reload trang, reset, hủy yêu cầu, phát sinh CO hoặc tạo lại lệnh chưa rõ kết quả. Quy tắc không reload khi chờ xác nhận/đang tạo CO giữ nguyên.
+

@@ -15,6 +15,7 @@ from transfer_parser import normalize_status
 from worker_runtime import Runtime, atomic_json
 from mwg_submit_capture import CreateCapture, merge_results
 from co_reconciliation_hold import enforce as enforce_reconciliation_hold, ReconciliationHold
+from browser_dialogs import install_dialogs
 
 URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
@@ -32,6 +33,14 @@ def health_state(state):
 
 def check_stop():
     if RUNTIME is not None:RUNTIME.check_stop()
+
+def browser_wait(page, milliseconds):
+    page.wait_for_timeout(milliseconds)
+    if RUNTIME is not None:RUNTIME.control_ok()
+
+def dialog_diagnostic(event):
+    # The broker supplies only a fixed event name/type and sanitized job ID.
+    print('Hộp thoại MWG: '+json.dumps(event,ensure_ascii=False),flush=True)
 
 def progress(job, stage):
     health_state('processing')
@@ -102,7 +111,7 @@ def import_with_retry(page, job, output, alerts, responses=None):
                     return popup
                 if time.monotonic()>=deadline:
                     break
-                page.wait_for_timeout(250)
+                browser_wait(page,250)
         finally:
             if responses is not None:
                 for event,handler in (('request',on_request),('response',on_response)):
@@ -333,7 +342,7 @@ class RecoveryGuard:
             else:
                 stable=None
             try:
-                self.page.wait_for_timeout(250)
+                browser_wait(self.page,250)
             except Exception as error:
                 if self.page.is_closed() or 'has been closed' in str(error):
                     return False
@@ -557,7 +566,7 @@ def wait_matched_rows(page, table, records, timeout=7):
                     'name':bool(cells[4].strip())} for cells in candidates])
             print('Đối chiếu bảng CO chưa khớp: '+json.dumps(diagnostic,ensure_ascii=False),flush=True)
             raise RuntimeError('Dữ liệu trên trang chưa khớp đủ '+str(len(records))+' dòng sau '+str(timeout)+' giây; chưa tạo CO.')
-        page.wait_for_timeout(100)
+        browser_wait(page,100)
 
 def cancel_import(page):
     cancel=page.get_by_text('Hủy',exact=True)
@@ -569,7 +578,7 @@ def wait_ui(page, ready, message, timeout=15):
     while not ready():
         if time.monotonic()>=deadline:
             raise RuntimeError(message)
-        page.wait_for_timeout(100)
+        browser_wait(page,100)
 
 
 def select_brands(page):
@@ -636,7 +645,7 @@ def wait_product_status(page, control, timeout=7):
         else:
             previous=value
             stable_since=now if value else None
-        page.wait_for_timeout(500)
+        browser_wait(page,500)
     return False
 
 
@@ -684,13 +693,7 @@ def process(page, job, prepared_id=None, guard=None):
     original_records=records
     outcomes=[{'co':'','error':''} for _ in records]
     excluded=[]
-    def on_dialog(dialog):
-        alerts.append(dialog.message)
-        if dialog.type=='alert':
-            dialog.accept()
-        else:
-            dialog.dismiss()
-    page.on('dialog',on_dialog)
+    alerts=install_dialogs(page.context,dialog_diagnostic).begin(page,job['id'])
     try:
         reuse=job.get('mode')=='create' and prepared_id==job['id']
         if job.get('mode')=='create' and job['payload'].get('product_name') and not reuse:
@@ -814,7 +817,7 @@ def process(page, job, prepared_id=None, guard=None):
                     return
             remaining=deadline-time.monotonic()
             if remaining<=0:break
-            page.wait_for_timeout(max(1,min(300,int(remaining*1000))))
+            browser_wait(page,max(1,min(300,int(remaining*1000))))
         raise RuntimeError(creation.problem or f'MWG chưa trả mã CO hoặc lỗi sau {CREATE_RESULT_WAIT_SECONDS} giây; tiếp tục theo dõi phản hồi, không tạo lại.')
     except Exception as error:
         progress(job,'exception_'+type(error).__name__)
@@ -861,10 +864,6 @@ def process(page, job, prepared_id=None, guard=None):
             report(job,'failed',message,before_submit=True)
     finally:
         if creation is not None:creation.close()
-        try:
-            page.remove_listener('dialog',on_dialog)
-        except Exception:
-            pass
 
 def open_browser(pw, background=False):
     # The bundled CfT archive lacks valid macOS signing resources on this Mac.
@@ -874,6 +873,11 @@ def open_browser(pw, background=False):
     context=pw.chromium.launch_persistent_context(
         str(ROOT/'browser'),channel='chrome',headless=background,accept_downloads=True,
         args=['--disable-backgrounding-occluded-windows','--disable-renderer-backgrounding'])
+    install_dialogs(context,dialog_diagnostic)
+    if RUNTIME is not None:
+        runtime=RUNTIME
+        generation=runtime.browser_opened()
+        context.on('close',lambda *_: runtime.browser_closed(generation))
     # MWG may request focus after navigation; leave foreground choice to the user.
     context.add_init_script("window.focus = () => {};")
     return context, context.pages[0] if context.pages else context.new_page()
@@ -939,6 +943,8 @@ def start_heartbeat():
             RUNTIME.persist()
             health=RUNTIME.snapshot()
             if health['state']!=previous or time.monotonic()-sent>=5:
+                if health['state']!=previous and health['state'] in {'driver_error','control_stalled'}:
+                    print('Phát hiện lỗi điều khiển: '+health['state']+'. Giữ nguyên trang và yêu cầu, không tự tạo lại CO.',flush=True)
                 try:
                     payload={'online':True,'health':health}
                     if TELEMETRY is not None:
@@ -1051,6 +1057,7 @@ def main():
     shutdown=start_heartbeat() if args.live else lambda:None
     try:
         with sync_playwright() as pw:
+            RUNTIME.watch_driver()
             context,page=open_browser(pw, background=args.background and not args.login)
             try:
                 if args.login:
@@ -1178,7 +1185,7 @@ def main():
                             refresh_at=time.monotonic()+300
                         if not job:
                             # Pump Playwright events so completion of XHR can clear the guard.
-                            try:page.wait_for_timeout(500 if prepared_id else 1000)
+                            try:browser_wait(page,500 if prepared_id else 1000)
                             except Exception:pass
             finally:
                 # Flush the persistent profile even on a cooperative stop or an error.
