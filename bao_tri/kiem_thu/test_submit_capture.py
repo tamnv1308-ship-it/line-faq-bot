@@ -17,7 +17,7 @@ def remote(source=3945,co='3945CO123',error='',**extra):
 
 
 class SubmitCaptureTests(unittest.TestCase):
-    def run_process(self,late,finish_at=0):
+    def run_process(self,late,finish_at=0,prepare_delay=0,click_return_delay=0):
         page=MagicMock();page.url=w.URL;clock=[0.0];callbacks={}
         page.on.side_effect=lambda event,fn:callbacks.setdefault(event,fn)
         page.get_by_role.return_value.input_value.return_value='1 - Mới'
@@ -26,10 +26,12 @@ class SubmitCaptureTests(unittest.TestCase):
         request=MagicMock(method='POST',url=CREATE_URL)
         request.response.return_value.status=200
         request.response.return_value.json.return_value={'Data':[remote()]}
+        page.get_by_role.return_value.evaluate.side_effect=[None,click_return_delay,None]
         def click():
             if late=='request':return
             callbacks['request'](request)
             if not late and not finish_at:callbacks['requestfinished'](request)
+            clock[0]+=click_return_delay
         page.get_by_role.return_value.click.side_effect=click
         finished=[False]
         def wait(ms):
@@ -38,6 +40,7 @@ class SubmitCaptureTests(unittest.TestCase):
                 callbacks['requestfinished'](request);finished[0]=True
         page.wait_for_timeout.side_effect=wait
         def report(job,state,*args,**kwargs):
+            if state=='submitting':clock[0]+=prepare_delay
             # A response can arrive while the timeout report itself is being delivered.
             if state=='unknown' and late!='request':callbacks['requestfinished'](request)
         row=['1','3945 - Xuất','447 - Nhận','0131491005415','iPhone','1','','','','','']
@@ -49,8 +52,8 @@ class SubmitCaptureTests(unittest.TestCase):
              patch.object(w.time,'monotonic',side_effect=lambda:clock[0]),patch.object(w,'report',side_effect=report) as send:
             w.process(page,job,'test',guard)
             if late:
-                self.assertGreaterEqual(clock[0],30)
-                self.assertLess(clock[0],30.31)
+                self.assertGreaterEqual(clock[0],prepare_delay+30)
+                self.assertLess(clock[0],prepare_delay+30.31)
                 self.assertEqual(send.call_args.args[1],'unknown')
                 self.assertIn('sau 30 giây',send.call_args.args[2])
                 self.assertEqual(len(guard.late_submissions),1)
@@ -71,6 +74,9 @@ class SubmitCaptureTests(unittest.TestCase):
     def test_result_at_twenty_seconds_succeeds_without_timeout_or_reload(self):self.run_process(False,20.1)
 
     def test_result_just_before_thirty_seconds_succeeds_without_timeout_or_reload(self):self.run_process(False,29.7)
+
+    def test_preparation_time_is_excluded_and_click_return_delay_is_included(self):
+        self.run_process(True,prepare_delay=90,click_return_delay=4)
 
     def test_process_retains_result_arriving_during_timeout_reporting(self):self.run_process(True)
 

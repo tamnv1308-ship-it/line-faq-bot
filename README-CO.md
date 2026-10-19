@@ -14,6 +14,10 @@ Trang tạo CO đã kết thúc phản hồi nhưng chưa đối chiếu đượ
 
 Sau một lần bấm Tạo CO, worker chờ tối đa 30 giây để đọc mã CO hoặc lỗi xác định từ phản hồi MWG/bảng kết quả. Có kết quả sớm thì trả ngay. Trong thời gian này không reload, không đổi trang và không bấm tạo lại. Sau 30 giây chưa rõ kết quả thì giữ quy trình đối soát hiện tại, không coi là đã hủy CO. Mốc phục hồi khi bot rảnh vẫn là 15 giây; hiệu lực xác nhận vẫn giữ nguyên.
 
+Mốc 30 giây lấy từ sự kiện click thật trên nút Tạo CO trong trình duyệt, không tính thời gian chuẩn bị file, gửi trạng thái máy chủ hoặc chờ nút sẵn sàng. Nếu không đọc được mốc click thì dùng thời điểm quan sát POST tạo CO; trường hợp không quan sát được cả hai dùng lúc thao tác click trả về để không tính sớm. Có kết quả trong lúc thao tác click còn chờ thì vẫn đọc kết quả trước khi xét hết giờ. Hết 30 giây không phải lệnh reload: trang còn kết nối dữ liệu, lớp Loading hoặc không đọc được trạng thái vẫn được giữ nguyên; chỉ trang đã hết tải và lưu đủ bằng chứng mới được thu hồi.
+
+Phản hồi tạo CO được ghi riêng theo yêu cầu tại `.co-mac/diagnostics/<id>-create-response.json`, quyền 600. Chỉ lưu mã HTTP, loại dữ liệu, cờ Success nếu là boolean, số dòng và mã lỗi cố định; không lưu body, Message, ghi chú, token hay cookie. `Data=null`, thiếu Data, sai định dạng, dòng không khớp và lỗi đọc JSON có thông báo riêng. HTTP 200 hoặc Success=true với Data rỗng vẫn là chưa rõ kết quả; không tự chuyển thành đã hủy/thất bại, không gửi lại CO và không bỏ khóa đối soát.
+
 ## Đối soát kết quả bị từ chối (2026-10-13)
 
 API `POST /co/worker/result-status` yêu cầu worker token, nhận ID và lease để đọc trạng thái/kết quả hiện tại cùng cờ so khớp lease. Endpoint không sửa trạng thái, không trả token và không tạo CO. `/co/worker/status` trả đúng cờ bật/tắt, độ mới heartbeat và phiên bản đối soát.

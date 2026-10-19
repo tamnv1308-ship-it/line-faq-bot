@@ -1,7 +1,7 @@
 """Import-only API probe. No CO creation endpoint or automatic retry."""
 import json
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from mwg_result_contract import row_identity, expected_identities
 
 ORIGIN = 'https://inventorytransfers.mwgroup.vn'
 IMPORT_URL = ORIGIN + '/StoreChangeOrderManually/ImportExcel'
@@ -18,25 +18,15 @@ def match_import_rows(body, expected):
         rows = json.loads(rows)
     if not isinstance(rows, list) or len(rows) != len(expected):
         raise ValueError('Số dòng MWG trả về không khớp yêu cầu.')
-    def identity(row, api=False):
-        keys = ('FROMSTOREID','TOSTOREID','PRODUCTID','QUANTITY') if api else ('source','destination','product','quantity')
-        def whole(value):
-            try:number=Decimal(str(value))
-            except InvalidOperation:raise ValueError('Mã kho hoặc số lượng không hợp lệ.') from None
-            if not number.is_finite() or number<=0 or number!=number.to_integral_value():
-                raise ValueError('Mã kho hoặc số lượng không hợp lệ.')
-            return str(int(number))
-        return (whole(row[keys[0]]),whole(row[keys[1]]),str(row[keys[2]]),whole(row[keys[3]]))
-    wanted = {identity(row): row for row in expected}
-    if len(wanted) != len(expected):
-        raise ValueError('Yêu cầu có dòng trùng.')
+    wanted = expected_identities(expected)
+    wanted_set = set(wanted)
     found = {}
     for row in rows:
-        key = identity(row, True)
-        if key not in wanted or key in found:
+        key = row_identity(row, True)
+        if key not in wanted_set or key in found:
             raise ValueError('Dữ liệu MWG trả về không khớp yêu cầu.')
         found[key] = row
-    return [found[identity(row)] for row in expected]
+    return [found[key] for key in wanted]
 
 
 def import_row_errors(body, expected):
@@ -69,6 +59,7 @@ def probe_import(request, token, excel_path, expected, status_id='1'):
     """
     if not token:
         raise ValueError('Thiếu mã xác thực MWG; chưa gửi file.')
+    expected_identities(expected)
     path = Path(excel_path)
     response = request.post(IMPORT_URL, multipart={
         'INVENTORYSTATUSID': str(status_id), 'STORECHANGETYPEID': '1',
@@ -77,7 +68,7 @@ def probe_import(request, token, excel_path, expected, status_id='1'):
         'fileUpload': {'name': path.name,
                        'mimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                        'buffer': path.read_bytes()},
-    }, timeout=60000, max_redirects=0)
+    }, timeout=60000, max_redirects=0, max_retries=0)
     if response.status != 200:
         raise ValueError('Nhập API không thành công (HTTP %s); chưa tạo CO.' % response.status)
     try:

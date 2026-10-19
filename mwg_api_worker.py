@@ -2,40 +2,20 @@
 import json
 import re
 from mwg_import_api import ORIGIN, probe_import
+from mwg_result_contract import row_identity as identity, expected_identities, parse_created_rows
+from co_reconciliation_hold import enforce as enforce_reconciliation_hold
 
 CREATE_URL=ORIGIN+'/StoreChangeOrderManually/CreateGroupCO'
-
-def identity(row, remote=False):
-    keys=('FROMSTOREID','TOSTOREID','PRODUCTID','QUANTITY') if remote else ('source','destination','product','quantity')
-    return (str(int(row[keys[0]])),str(int(row[keys[1]])),str(row[keys[2]]),int(row[keys[3]]))
 
 def fingerprint(records,status):
     return (status,tuple((identity(r),r.get('note','')) for r in records))
 
 def outcomes(body,records):
     # HTTP 200 / Success true alone never proves creation.
-    rows=body.get('Data') if isinstance(body,dict) else None
-    if not isinstance(rows,list):
-        raise ValueError('MWG không trả danh sách kết quả; cần đối soát trước khi tạo lại.')
-    wanted=[identity(r) for r in records]
-    mapped={}
-    for row in rows:
-        key=identity(row,True)
-        if key not in wanted or key in mapped:
-            raise ValueError('Kết quả MWG không khớp yêu cầu; cần đối soát.')
-        co=str(row.get('STORECHANGEORDERID') or '').strip()
-        error=str(row.get('ERRORNOTE') or '').strip()
-        valid=bool(re.fullmatch(r'[0-9]+CO[0-9]+',co))
-        if valid and row.get('ISERROR') is False and not error:
-            mapped[key]=({'co':co,'error':''},False)
-        elif not co and row.get('ISERROR') is True and error:
-            mapped[key]=({'co':'','error':error[:350]},False)
-        else:
-            mapped[key]=({'co':co if valid else '', 'error':'Chưa rõ kết quả MWG; cần đối soát. '+error[:250]},True)
-    result=[];unknown=False
-    for key in wanted:
-        row,uncertain=mapped.get(key,({'co':'','error':'MWG chưa trả kết quả dòng này; cần đối soát.'},True))
-        result.append(row);unknown|=uncertain
+    result=parse_created_rows(body,records)
+    unknown=any(row['state']=='unknown' for row in result)
+    # The existing queue uses succeeded for a resolved batch with at least one
+    # CO; retain explicit per-row failure states for accurate UI/protection.
     return ('unknown' if unknown else 'succeeded' if any(r['co'] for r in result) else 'failed'),result
 
 
@@ -61,6 +41,8 @@ class ApiWorker:
         status=worker.normalize_status(job['payload'].get('status','Mới'))
         sent=False
         try:
+            expected_identities(records)
+            enforce_reconciliation_hold(worker.ROOT,job['id'],records)
             if job.get('mode')=='preview':
                 self.prepared=None
                 worker.progress(job,'api_prepare')
@@ -102,6 +84,6 @@ class ApiWorker:
             # Do not leak browser request headers or tokens through exception text.
             message=str(error)[:500] if isinstance(error,ValueError) else 'Lỗi kết nối API MWG ('+type(error).__name__+').'
             if sent:
-                worker.report(job,'unknown',json.dumps([{'co':'','error':'Cần đối soát MWG; không tự tạo lại. '+message} for _ in records],ensure_ascii=False))
+                worker.report(job,'unknown',json.dumps([{'co':'','error':'Cần đối soát MWG; không tự tạo lại. '+message,'state':'unknown'} for _ in records],ensure_ascii=False))
             else:
                 worker.report(job,'failed',message+' Chưa tạo CO.',before_submit=True)

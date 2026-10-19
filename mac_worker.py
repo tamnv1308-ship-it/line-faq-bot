@@ -58,6 +58,12 @@ def capture_failure(page, label):
     except Exception:
         pass
 
+def save_create_diagnostic(job, diagnostic):
+    """Persist only the allowlisted response shape, never a raw MWG response."""
+    folder=ROOT/'diagnostics';folder.mkdir(mode=0o700,exist_ok=True)
+    name=re.sub(r'[^a-zA-Z0-9_-]','_',str(job['id']))[:60]
+    atomic_json(folder/(name+'-create-response.json'),dict(diagnostic,job_id=job['id'],updated=time.time()))
+
 def upload_excel(page, output):
     # Use the site's import button so its preparation handlers run before upload.
     with page.expect_file_chooser(timeout=15000) as chooser:
@@ -295,9 +301,9 @@ class RecoveryGuard:
         now=time.monotonic()
         if self.loading_since is None:self.loading_since=now
         return 'loading_slow' if now-self.loading_since>=SLOW_LOADING_SECONDS else 'loading'
-    def readiness_reason(self):
+    def readiness_reason(self,ignore_submission=False):
         page=self.page
-        if self.uncertain_job is not None or self.late_submissions:
+        if not ignore_submission and (self.uncertain_job is not None or self.late_submissions):
             return 'Đang chờ đối soát phản hồi tạo CO; giữ nguyên trang.'
         try:
             if page.is_closed():return 'Cửa sổ đã đóng.'
@@ -372,6 +378,7 @@ def archive_settled_submission(guard, job, capture, previous):
     if (ROOT/'pending.json').exists():return
     closed=capture.page.is_closed()
     if not closed and (not capture.done or guard.pending):return
+    if not closed and guard.readiness_reason(ignore_submission=True) is not None:return
     try:
         snapshot=api('result-status',{'id':job['id'],'lease':job['lease']},timeout=5)
         if not isinstance(snapshot,dict) or not snapshot.get('found'):return
@@ -385,6 +392,7 @@ def archive_settled_submission(guard, job, capture, previous):
         evidence={'version':1,'id':job['id'],'archived_at':time.time(),
                   'request_count':len(capture.requests),'page_closed':closed,
                   'transport_finished':bool(capture.done),'problem':capture.problem,
+                  'response_diagnostic':capture.diagnostic,
                   'previous_outcomes':previous,'observed_outcomes':rows,
                   'server_state':snapshot['state'],'server_result':snapshot.get('result',''),
                   'records':[{k:row.get(k) for k in ('source','destination','product','quantity')}
@@ -394,7 +402,8 @@ def archive_settled_submission(guard, job, capture, previous):
         capture_failure(capture.page,job['id']+'-settled')
         # Browser events can be delivered during the screenshot/status request.
         if (len(capture.requests)!=evidence['request_count'] or
-                (not capture.page.is_closed() and (guard.pending or not capture.done))):return
+                (not capture.page.is_closed() and
+                 (guard.pending or not capture.done or guard.readiness_reason(ignore_submission=True) is not None))):return
         guard.retirement_ready=True
         progress(job,'settled_submission_archived')
     except Exception as error:
@@ -421,6 +430,7 @@ def workspace_can_retire(guard):
     closed=guard.page.is_closed()
     if guard.pending and not closed:return False
     if not guard.uncertain_job and not guard.late_submissions:return True
+    if not closed and guard.readiness_reason(ignore_submission=True) is not None:return False
     return (guard.retirement_ready and
             all(capture.done or capture.page.is_closed() for _,capture,_ in guard.late_submissions))
 
@@ -758,10 +768,18 @@ def process(page, job, prepared_id=None, guard=None):
         submitting=True
         progress(job,'submit_co')
         alerts.clear()
-        creation=CreateCapture(page,records)
-        page.get_by_role('button',name='Tạo CO',exact=True).click()
-        deadline=time.monotonic()+CREATE_RESULT_WAIT_SECONDS
-        while time.monotonic()<deadline:
+        creation=CreateCapture(page,records,on_diagnostic=lambda evidence:save_create_diagnostic(job,evidence))
+        create_button=page.get_by_role('button',name='Tạo CO',exact=True)
+        creation.arm_click(create_button)
+        click_error=None
+        try:create_button.click()
+        except Exception as error:click_error=error
+        # Start at the trusted DOM click (or observed POST), excluding preparation,
+        # server reporting and actionability waits before the actual click.
+        deadline=creation.result_deadline(CREATE_RESULT_WAIT_SECONDS)
+        if click_error is not None and creation.clicked_at is None and not creation.requests:
+            raise click_error
+        while True:
             if creation.rows is not None and len(creation.requests)==1:
                 outcomes=merge_results(outcomes,creation.rows)
                 if all(row.get('state') in {'succeeded','failed'} for row in outcomes):
@@ -794,7 +812,9 @@ def process(page, job, prepared_id=None, guard=None):
                     report(job,state,json.dumps(outcomes,ensure_ascii=False))
                     if guard is not None and state!='unknown':guard.uncertain_job=None
                     return
-            page.wait_for_timeout(300)
+            remaining=deadline-time.monotonic()
+            if remaining<=0:break
+            page.wait_for_timeout(max(1,min(300,int(remaining*1000))))
         raise RuntimeError(creation.problem or f'MWG chưa trả mã CO hoặc lỗi sau {CREATE_RESULT_WAIT_SECONDS} giây; tiếp tục theo dõi phản hồi, không tạo lại.')
     except Exception as error:
         progress(job,'exception_'+type(error).__name__)

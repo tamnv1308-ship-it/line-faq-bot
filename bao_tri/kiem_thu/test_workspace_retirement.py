@@ -27,6 +27,10 @@ class WorkspaceRetirementTests(unittest.TestCase):
     def page(self):
         page = MagicMock(); page.url = w.URL
         page.is_closed.return_value = False
+        page.locator.return_value.count.return_value = 0
+        page.get_by_text.return_value.all.return_value = []
+        page.get_by_text.return_value.is_visible.return_value = False
+        page.get_by_role.return_value.input_value.return_value = '1 - Mới'
         page.close.side_effect = lambda **kw: setattr(page.is_closed, 'return_value', True)
         return page
 
@@ -152,6 +156,32 @@ class WorkspaceRetirementTests(unittest.TestCase):
         guard.pending.add(object())
         w.reconcile_late_submissions(guard)
         self.api.assert_not_called(); self.assertFalse(guard.retirement_ready)
+
+    def test_completed_response_with_loading_overlay_keeps_original_page(self):
+        page, guard, _, _, _ = self.submission()
+        page.locator.return_value.count.return_value = 1
+        w.reconcile_late_submissions(guard)
+        self.api.assert_not_called(); self.assertFalse(guard.retirement_ready)
+        self.assertFalse(w.retire_workspace(guard)); page.close.assert_not_called()
+        preserved=[]
+        _, _, isolated=w.isolate_workspace(MagicMock(),page,guard,preserved)
+        self.assertTrue(isolated);self.assertEqual(preserved,[guard])
+        page.close.assert_not_called();page.reload.assert_not_called()
+
+    def test_loading_appearing_after_archive_prevents_retirement(self):
+        page, guard, _, _, _ = self.submission()
+        w.reconcile_late_submissions(guard)
+        self.assertTrue(guard.retirement_ready)
+        page.locator.return_value.count.return_value = 1
+        self.assertFalse(w.retire_workspace(guard));page.close.assert_not_called()
+
+    def test_unreadable_or_login_page_does_not_prove_finished_processing(self):
+        for kind in ('unreadable','login'):
+            page, guard, _, _, _ = self.submission()
+            if kind=='unreadable':page.locator.side_effect=RuntimeError('read failed')
+            else:page.url='https://sso.example/login'
+            w.reconcile_late_submissions(guard)
+            self.assertFalse(guard.retirement_ready);page.close.assert_not_called()
 
     def test_archive_preserves_partial_codes_and_existing_manual_holds(self):
         page, guard, job, capture, _ = self.submission()
