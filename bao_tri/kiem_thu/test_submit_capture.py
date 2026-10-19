@@ -17,7 +17,7 @@ def remote(source=3945,co='3945CO123',error='',**extra):
 
 
 class SubmitCaptureTests(unittest.TestCase):
-    def run_process(self,late):
+    def run_process(self,late,finish_at=0):
         page=MagicMock();page.url=w.URL;clock=[0.0];callbacks={}
         page.on.side_effect=lambda event,fn:callbacks.setdefault(event,fn)
         page.get_by_role.return_value.input_value.return_value='1 - Mới'
@@ -29,9 +29,14 @@ class SubmitCaptureTests(unittest.TestCase):
         def click():
             if late=='request':return
             callbacks['request'](request)
-            if not late:callbacks['requestfinished'](request)
+            if not late and not finish_at:callbacks['requestfinished'](request)
         page.get_by_role.return_value.click.side_effect=click
-        page.wait_for_timeout.side_effect=lambda ms:clock.__setitem__(0,clock[0]+ms/1000)
+        finished=[False]
+        def wait(ms):
+            clock[0]=round(clock[0]+ms/1000,6)
+            if finish_at and clock[0]>=finish_at and not finished[0]:
+                callbacks['requestfinished'](request);finished[0]=True
+        page.wait_for_timeout.side_effect=wait
         def report(job,state,*args,**kwargs):
             # A response can arrive while the timeout report itself is being delivered.
             if state=='unknown' and late!='request':callbacks['requestfinished'](request)
@@ -44,17 +49,28 @@ class SubmitCaptureTests(unittest.TestCase):
              patch.object(w.time,'monotonic',side_effect=lambda:clock[0]),patch.object(w,'report',side_effect=report) as send:
             w.process(page,job,'test',guard)
             if late:
+                self.assertGreaterEqual(clock[0],30)
+                self.assertLess(clock[0],30.31)
                 self.assertEqual(send.call_args.args[1],'unknown')
+                self.assertIn('sau 30 giây',send.call_args.args[2])
                 self.assertEqual(len(guard.late_submissions),1)
                 if late=='request':
                     callbacks['request'](request)
                     callbacks['requestfinished'](request)
                 w.reconcile_late_submissions(guard)
+            else:
+                self.assertEqual([call.args[1] for call in send.call_args_list],['submitting','succeeded'])
+                self.assertAlmostEqual(clock[0],finish_at)
             self.assertEqual(send.call_args.args[1],'succeeded')
             self.assertEqual(json.loads(send.call_args.args[2])[0]['co'],'3945CO123')
         page.get_by_role.return_value.click.assert_called_once();page.reload.assert_not_called()
+        page.goto.assert_not_called();page.close.assert_not_called()
 
     def test_process_uses_response_when_dom_has_no_rows(self):self.run_process(False)
+
+    def test_result_at_twenty_seconds_succeeds_without_timeout_or_reload(self):self.run_process(False,20.1)
+
+    def test_result_just_before_thirty_seconds_succeeds_without_timeout_or_reload(self):self.run_process(False,29.7)
 
     def test_process_retains_result_arriving_during_timeout_reporting(self):self.run_process(True)
 

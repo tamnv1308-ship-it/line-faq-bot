@@ -20,6 +20,7 @@ URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
 TEMPLATE = Path(__file__).resolve().parent / 'templates' / 'StoreChangeOrderTGDD_template.xlsx'
 SLOW_LOADING_SECONDS = 15
+CREATE_RESULT_WAIT_SECONDS = 30
 IDLE_REPAIR_INTERVAL_SECONDS = 15
 IDLE_REPAIR_MAX_ATTEMPTS = 5
 MAX_PRESERVED_WORKSPACES = 3
@@ -759,7 +760,7 @@ def process(page, job, prepared_id=None, guard=None):
         alerts.clear()
         creation=CreateCapture(page,records)
         page.get_by_role('button',name='Tạo CO',exact=True).click()
-        deadline=time.monotonic()+15
+        deadline=time.monotonic()+CREATE_RESULT_WAIT_SECONDS
         while time.monotonic()<deadline:
             if creation.rows is not None and len(creation.requests)==1:
                 outcomes=merge_results(outcomes,creation.rows)
@@ -794,7 +795,7 @@ def process(page, job, prepared_id=None, guard=None):
                     if guard is not None and state!='unknown':guard.uncertain_job=None
                     return
             page.wait_for_timeout(300)
-        raise RuntimeError(creation.problem or 'MWG chưa trả mã CO hoặc lỗi sau 15 giây; tiếp tục theo dõi phản hồi, không tạo lại.')
+        raise RuntimeError(creation.problem or f'MWG chưa trả mã CO hoặc lỗi sau {CREATE_RESULT_WAIT_SECONDS} giây; tiếp tục theo dõi phản hồi, không tạo lại.')
     except Exception as error:
         progress(job,'exception_'+type(error).__name__)
         capture_failure(page,job['id'])
@@ -831,7 +832,7 @@ def process(page, job, prepared_id=None, guard=None):
             report(job,'unknown',json.dumps(outcomes,ensure_ascii=False))
             if guard is not None and creation is not None:
                 guard.late_submissions.append((job,creation,outcomes))
-                creation=None  # Keep observing this exact request after the 15s notice.
+                creation=None  # Keep observing this exact request after the result wait expires.
         else:
             if excluded:
                 failures={row['index']:row['error'] for row in excluded}

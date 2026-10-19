@@ -12,6 +12,8 @@ Sau khi chọn thương hiệu cho một yêu cầu, ô trạng thái có riêng
 
 Trang tạo CO đã kết thúc phản hồi nhưng chưa đối chiếu được kết quả được lưu bằng chứng tại `.co-mac/settled-submissions/` (quyền 600) và ảnh chẩn đoán. Worker đọc lại trạng thái yêu cầu trên máy chủ trước khi thu hồi trang đó; không đổi trạng thái job, không tự hủy, không tạo lại và không gỡ khóa kho xuất + MSP còn `unknown`. Khi chủ bot đã hủy, chỉ chấp nhận đối chiếu nếu kết quả gốc vẫn được giữ nguyên. Trang cũ đã xử lý xong được thu hồi để không chiếm mãi giới hạn 3 trang đối soát. Trang vẫn có request đang chạy, chưa quan sát được request tạo CO, hoặc còn kết quả chưa gửi phải giữ nguyên. Nếu cả 3 trang cũ vẫn thực sự chờ phản hồi, tiếp tục chặn an toàn thay vì mở vô hạn. Các khóa riêng trong `reconciliation-holds.json` vẫn được giữ nguyên qua cập nhật và khởi động lại.
 
+Sau một lần bấm Tạo CO, worker chờ tối đa 30 giây để đọc mã CO hoặc lỗi xác định từ phản hồi MWG/bảng kết quả. Có kết quả sớm thì trả ngay. Trong thời gian này không reload, không đổi trang và không bấm tạo lại. Sau 30 giây chưa rõ kết quả thì giữ quy trình đối soát hiện tại, không coi là đã hủy CO. Mốc phục hồi khi bot rảnh vẫn là 15 giây; hiệu lực xác nhận vẫn giữ nguyên.
+
 ## Đối soát kết quả bị từ chối (2026-10-13)
 
 API `POST /co/worker/result-status` yêu cầu worker token, nhận ID và lease để đọc trạng thái/kết quả hiện tại cùng cờ so khớp lease. Endpoint không sửa trạng thái, không trả token và không tạo CO. `/co/worker/status` trả đúng cờ bật/tắt, độ mới heartbeat và phiên bản đối soát.
