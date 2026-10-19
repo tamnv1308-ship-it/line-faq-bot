@@ -121,6 +121,8 @@ Hủy thành công và nhật ký bắt buộc được ghi trong cùng giao d�
 
 ## API nhập Excel riêng (2026-10-19)
 
+Phục hồi ô trạng thái khi rảnh: sau khi chọn thương hiệu, bơm sự kiện trình duyệt và chờ tối đa 7 giây để dữ liệu trạng thái ổn định trước khi quyết định reload. Tải lại định kỳ 5 phút cũng chuẩn bị thương hiệu và trạng thái ngay trong lượt đó. Không bỏ qua request đang chờ; không reload hoặc đổi lựa chọn khi có bản xác nhận, đang tạo CO hay kết quả cần đối soát trên trang. Kiểm tra lại chốt hàng chờ sau các thao tác chờ.
+
 Worker mặc định `CO_IMPORT_TRANSPORT=auto`: nhập Excel bằng `ImportExcel` trong chính phiên MWG đang đăng nhập, lấy tham số và mã chống giả mạo từ bộ xử lý upload của website. Sau khi đối chiếu đúng từng dòng, trạng thái và Note, worker chuyển phản hồi cho bộ xử lý success sẵn có của MWG để mở popup thật; vẫn bấm Đồng ý và kiểm tra bảng chính trước khi trả thông tin xác nhận. Không dùng nhánh `--api` tạo CO, không thay đổi bước Xác nhận/Hủy, thời hạn, phân quyền, tạo CO một lần, giữ trang chờ xác nhận hay kết quả chưa rõ.
 
 Gửi nhập bằng `fetch` cùng origin trong Chrome đang đăng nhập, dùng cookie và các header Origin/Referer do trình duyệt quản lý, không dùng mạng riêng của `context.request`. Mã chống giả mạo vẫn lấy từ callback upload của MWG. Không bỏ kiểm tra chứng chỉ, không chuyển hướng và không retry khi lỗi. Nhật ký lỗi chỉ gồm bước prepare/upload/validate/apply và mã lỗi cố định; không lưu header, cookie, nội dung file hay nguyên văn ngoại lệ.

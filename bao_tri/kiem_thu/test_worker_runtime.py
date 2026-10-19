@@ -69,6 +69,7 @@ class RuntimeTests(unittest.TestCase):
         guard=w.RecoveryGuard(page)
         guard.repair_at=0
         with patch.object(w,'ROOT',self.root),patch.object(w,'api',return_value={'states':{'unknown':5}}),\
+             patch.object(guard,'wait_ready',return_value=False),\
              patch.object(guard,'ready',side_effect=[False,False,True]),patch.object(w,'select_brands'):
             self.assertTrue(w.recover_idle_controls(page,guard))
         page.reload.assert_called_once()
@@ -95,6 +96,7 @@ class RuntimeTests(unittest.TestCase):
         page=MagicMock();page.url=w.URL;page.is_closed.return_value=False
         guard=w.RecoveryGuard(page);clock=[0.0]
         with patch.object(guard,'ready',return_value=False),patch.object(w.time,'monotonic',side_effect=lambda:clock[0]),\
+             patch.object(guard,'wait_ready',return_value=False),\
              patch.object(w,'select_brands'),patch.object(w,'capture_failure'),patch.object(w,'ROOT',self.root),patch.object(w,'api',return_value={'states':{}}):
             self.assertFalse(w.recover_idle_controls(page,guard))
             for _ in range(6):

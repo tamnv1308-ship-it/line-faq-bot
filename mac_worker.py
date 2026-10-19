@@ -924,8 +924,32 @@ def refresh_idle(page, guard=None):
         return False
     if (guard is None or not guard.track_submissions) and states.get('unknown',0):
         return False
+    if (ROOT/'pending.json').exists() or (guard is not None and
+            (guard.pending or guard.uncertain_job is not None or guard.late_submissions or guard.repair_failed)):
+        return False
     page.reload(wait_until='domcontentloaded',timeout=30000)
     print('Đã tải lại trang MWG sau 5 phút khi rảnh.',flush=True)
+    if guard is not None:
+        # Reload clears the brands that populate the dependent status control.
+        # Prepare them in this idle cycle, rather than leaving intake disabled
+        # until a later repair tick and potentially reloading a loading status.
+        deadline=time.monotonic()+7
+        while guard.pending and time.monotonic()<deadline:
+            browser_wait(page,100)
+        if (guard.pending or guard.uncertain_job is not None or guard.late_submissions
+                or (ROOT/'pending.json').exists() or page.is_closed()
+                or page.url.split('?',1)[0].split('#',1)[0].rstrip('/')!=URL):
+            return True
+        states=api('status',None,timeout=5)['states']
+        if any(states.get(state,0) for state in ('draft','queued','verified_queued','preview_queued','running','submitting','preview_running')):
+            return True
+        if guard.pending or guard.uncertain_job is not None or guard.late_submissions or (ROOT/'pending.json').exists():
+            return True
+        try:
+            select_brands(page)
+            guard.wait_ready(timeout=7)
+        except Exception as error:
+            print('MWG chưa hoàn tất chuẩn bị sau tải lại ('+type(error).__name__+'); giữ trang chờ phục hồi.',flush=True)
     return True
 
 def ensure_browser(pw, context, page, background=False):
@@ -1044,6 +1068,9 @@ def recover_idle_controls(page, guard, prepared_id=None):
         except Exception as error:
             print('Chưa chuẩn bị được thương hiệu MWG ('+type(error).__name__+').',flush=True)
         if guard.ready():return True
+        # Selecting brands starts asynchronous GetInventoryStatus requests. Give
+        # them a bounded settling budget; an immediate reload cancels that work.
+        if not protected() and guard.wait_ready(timeout=7):return True
         # Recheck after UI waits: confirmation/submission may have started meanwhile.
         if protected() or guard.pending or not server_idle() or protected() or guard.pending:
             return False

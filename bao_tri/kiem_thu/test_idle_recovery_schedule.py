@@ -17,6 +17,9 @@ class IdleRecoveryScheduleTests(unittest.TestCase):
         self.page.url = w.URL
         self.page.is_closed.return_value = False
         self.guard = w.RecoveryGuard(self.page)
+        # Scheduling tests isolate the now separately covered 7-second settle.
+        patcher = patch.object(self.guard,'wait_ready',return_value=False)
+        patcher.start();self.addCleanup(patcher.stop)
         self.reason = 'Ô trạng thái sản phẩm chưa sẵn sàng.'
         self.api = MagicMock(return_value={'states': {}})
         self.brands = MagicMock()

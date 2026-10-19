@@ -60,6 +60,7 @@ class LoadingHealthTests(unittest.TestCase):
     def test_only_exhausted_idle_repair_marks_loading_as_blocked(self):
         self.guard.page_health(False)
         with patch.object(self.guard, 'ready', return_value=False), \
+             patch.object(self.guard, 'wait_ready', return_value=False), \
              patch.object(w, 'select_brands'), patch.object(w, 'capture_failure'):
             self.assertFalse(w.recover_idle_controls(self.page, self.guard))
             for attempt in range(5):
