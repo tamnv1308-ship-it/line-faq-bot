@@ -12,8 +12,9 @@ import urllib.error
 from pathlib import Path
 from co_results import items
 from transfer_parser import normalize_status
-from worker_runtime import Runtime
+from worker_runtime import Runtime, atomic_json
 from mwg_submit_capture import CreateCapture, merge_results
+from co_reconciliation_hold import enforce as enforce_reconciliation_hold, ReconciliationHold
 
 URL = 'https://inventorytransfers.mwgroup.vn/storechangeordermanually'
 ROOT = Path(__file__).resolve().parent / '.co-mac'
@@ -21,6 +22,7 @@ TEMPLATE = Path(__file__).resolve().parent / 'templates' / 'StoreChangeOrderTGDD
 SLOW_LOADING_SECONDS = 15
 IDLE_REPAIR_INTERVAL_SECONDS = 15
 IDLE_REPAIR_MAX_ATTEMPTS = 5
+MAX_PRESERVED_WORKSPACES = 3
 RUNTIME = None
 TELEMETRY = None
 
@@ -249,6 +251,8 @@ class RecoveryGuard:
         self.repair_failed=False
         self.repair_at=None
         self.repair_attempts=0
+        self.retirement_ready=False
+        self.retirement_check_at=0
         # Historical unknown jobs stay protected by the server's stock checks.
         # Only an uncertain submission on THIS page must prevent page repair.
         self.uncertain_job=None
@@ -259,6 +263,7 @@ class RecoveryGuard:
     def request(self,request):
         if request.resource_type in ('xhr','fetch'):
             self.pending.add(request)
+            self.retirement_ready=False
     def finished(self,request):
         self.pending.discard(request)
     def ready(self):
@@ -353,6 +358,48 @@ def report(job, state, result='', *, before_submit=False):
     progress(job,'reported_'+state)
 
 
+def archive_settled_submission(guard, job, capture, previous):
+    """Release a browser resource, never the server's unresolved stock hold.
+
+    No in-flight request may be retired. Persist evidence and confirm that the
+    server still holds this job before allowing a completed page to be closed.
+    Keep capture listeners until close, so a delayed second POST revokes this.
+    """
+    if guard.retirement_ready:return
+    if time.monotonic()<guard.retirement_check_at:return
+    guard.retirement_check_at=time.monotonic()+15
+    if (ROOT/'pending.json').exists():return
+    closed=capture.page.is_closed()
+    if not closed and (not capture.done or guard.pending):return
+    try:
+        snapshot=api('result-status',{'id':job['id'],'lease':job['lease']},timeout=5)
+        if not isinstance(snapshot,dict) or not snapshot.get('found'):return
+        if snapshot.get('state') not in {'unknown','succeeded','failed','cancelled','expired'}:return
+        # Owner cancellation clears the lease but retains the exact unknown result.
+        cancelled=(snapshot.get('state')=='cancelled' and
+                   json.loads(snapshot.get('result') or 'null')==previous)
+        if snapshot.get('lease_matches') is not True and not cancelled:return
+        rows=merge_results(previous,capture.rows) if capture.rows is not None else previous
+        folder=ROOT/'settled-submissions';folder.mkdir(mode=0o700,exist_ok=True)
+        evidence={'version':1,'id':job['id'],'archived_at':time.time(),
+                  'request_count':len(capture.requests),'page_closed':closed,
+                  'transport_finished':bool(capture.done),'problem':capture.problem,
+                  'previous_outcomes':previous,'observed_outcomes':rows,
+                  'server_state':snapshot['state'],'server_result':snapshot.get('result',''),
+                  'records':[{k:row.get(k) for k in ('source','destination','product','quantity')}
+                             for row in items(job['payload'])],
+                  'replay_allowed':False}
+        atomic_json(folder/(job['id']+'.json'),evidence)
+        capture_failure(capture.page,job['id']+'-settled')
+        # Browser events can be delivered during the screenshot/status request.
+        if (len(capture.requests)!=evidence['request_count'] or
+                (not capture.page.is_closed() and (guard.pending or not capture.done))):return
+        guard.retirement_ready=True
+        progress(job,'settled_submission_archived')
+    except Exception as error:
+        print('Chưa lưu/đối chiếu được trang CO '+job['id']+' ('+type(error).__name__+'); giữ nguyên trang.',flush=True)
+
+
 def reconcile_late_submissions(guard):
     for entry in list(guard.late_submissions):
         job,capture,previous=entry
@@ -363,13 +410,52 @@ def reconcile_late_submissions(guard):
                 progress(job,'late_create_response_verified')
                 report(job,result_state(resolved),json.dumps(resolved,ensure_ascii=False))
                 if guard.uncertain_job==job['id']:guard.uncertain_job=None
-        capture.close();guard.late_submissions.remove(entry)
+                capture.close();guard.late_submissions.remove(entry)
+                continue
+        archive_settled_submission(guard,job,capture,previous)
+
+
+def workspace_can_retire(guard):
+    if (ROOT/'pending.json').exists():return False
+    closed=guard.page.is_closed()
+    if guard.pending and not closed:return False
+    if not guard.uncertain_job and not guard.late_submissions:return True
+    return (guard.retirement_ready and
+            all(capture.done or capture.page.is_closed() for _,capture,_ in guard.late_submissions))
+
+
+def retire_workspace(guard):
+    if not workspace_can_retire(guard):return False
+    try:
+        if not guard.page.is_closed():guard.page.close(run_before_unload=False)
+    except Exception:return False
+    for _,capture,_ in guard.late_submissions:capture.close()
+    guard.late_submissions.clear()
+    for event,handler in (('request',guard.request),('requestfinished',guard.finished),('requestfailed',guard.finished)):
+        try:guard.page.remove_listener(event,handler)
+        except Exception:pass
+    return True
+
+
+def prune_preserved_workspaces(preserved, prepared_id=None):
+    if prepared_id or (ROOT/'pending.json').exists():return
+    for saved in list(preserved):
+        if retire_workspace(saved):preserved.remove(saved)
 
 def isolate_workspace(context, page, guard, preserved, prepared_id=None):
-    if prepared_id or (ROOT/'pending.json').exists() or len(preserved)>=3:
+    if prepared_id or (ROOT/'pending.json').exists():
         return page,guard,False
+    prune_preserved_workspaces(preserved)
+    can_retire=workspace_can_retire(guard)
+    if not can_retire and len(preserved)>=MAX_PRESERVED_WORKSPACES:
+        return page,guard,False
+    # Create the replacement before closing the last working browser page.
     fresh=context.new_page()
-    preserved.append(guard)
+    retired=retire_workspace(guard) if can_retire else False
+    if not retired and len(preserved)>=MAX_PRESERVED_WORKSPACES:
+        fresh.close(run_before_unload=False)
+        return page,guard,False
+    if not retired:preserved.append(guard)
     return fresh,RecoveryGuard(fresh,track_submissions=guard.track_submissions),True
 
 def fill_template(source, target, data):
@@ -578,6 +664,12 @@ def process(page, job, prepared_id=None, guard=None):
     creation=None
     alerts=[]
     records=items(job['payload'])
+    try:
+        enforce_reconciliation_hold(ROOT,job['id'],records)
+    except ReconciliationHold as error:
+        progress(job,'reconciliation_hold')
+        report(job,'failed',str(error),before_submit=True)
+        return
     original_records=records
     outcomes=[{'co':'','error':''} for _ in records]
     excluded=[]
@@ -991,12 +1083,14 @@ def main():
                         for preserved in preserved_guards:
                             reconcile_late_submissions(preserved)
                         reconcile_late_submissions(guard)
-                        if guard.uncertain_job and not prepared_id and not pending.exists() and len(preserved_guards)<3:
+                        prune_preserved_workspaces(preserved_guards,prepared_id)
+                        if guard.uncertain_job and not prepared_id and not pending.exists():
                             # Preserve the exact submission page and its response listeners.
                             # Server unknown-stock protection prevents replay on the fresh page.
-                            page,guard,_=isolate_workspace(context,page,guard,preserved_guards,prepared_id)
-                            recovery_ready=False
-                            print('Giữ trang CO chưa rõ kết quả; mở trang riêng cho yêu cầu khác, không tạo lại CO cũ.',flush=True)
+                            page,guard,isolated=isolate_workspace(context,page,guard,preserved_guards,prepared_id)
+                            if isolated:
+                                recovery_ready=False
+                                print('Đã tách yêu cầu cần đối soát; dùng trang riêng cho yêu cầu khác, không tạo lại CO cũ.',flush=True)
                         context,page=ensure_browser(pw,context,page,background=args.background)
                         page=find_idle_mwg_page(context,page,guard,prepared_id,
                                                 excluded_pages=[saved.page for saved in preserved_guards])
@@ -1026,11 +1120,11 @@ def main():
                                                  'reset_protocol':1,'recovery_protocol':int(not args.api),
                                                  'page_ready':recovery_ready and guard.ready()})
                         if job and job.get('reset_workspace'):
-                            if not prepared_id and not pending.exists() and len(preserved_guards)<3:
-                                page,guard,_=isolate_workspace(context,page,guard,preserved_guards,prepared_id)
+                            page,guard,isolated=isolate_workspace(context,page,guard,preserved_guards,prepared_id)
+                            if isolated:
                                 recovery_ready=False
                                 refresh_at=time.monotonic()+300
-                                print('Đã nhận reset từ chủ bot; giữ trang cũ và mọi kết quả CO.',flush=True)
+                                print('Đã nhận reset từ chủ bot; giữ bằng chứng và trang CO còn phản hồi.',flush=True)
                             else:
                                 print('Chưa reset: cần đối soát các trang đang giữ hoặc kết quả chưa gửi.',flush=True)
                             continue
