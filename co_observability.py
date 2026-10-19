@@ -20,6 +20,7 @@ WORKER_STAGES = {
     'submit_co':'Gửi tạo CO và chờ MWG', 'create_response_verified':'Đối chiếu kết quả CO',
     'late_create_response_verified':'Đối chiếu kết quả về muộn',
     'api_prepare':'Chuẩn bị MWG', 'api_import':'Nhập file qua API MWG',
+    'api_import_ui_fallback':'Nhập file bằng giao diện dự phòng',
     'api_submit_co':'Gửi tạo CO qua API MWG', 'send_result':'Gửi kết quả từ Mac về máy chủ',
 }
 ERRORS = {

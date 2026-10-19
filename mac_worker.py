@@ -79,8 +79,39 @@ def upload_excel(page, output):
         page.get_by_role('button',name=re.compile('Nhập Excel mẫu')).click()
     chooser.value.set_files(str(output))
 
-def import_with_retry(page, job, output, alerts, responses=None):
-    """Retry only an import timeout, before any CO submission is possible."""
+def import_with_retry(page, job, output, alerts, responses=None, records=None):
+    """Prefer import-only API; legacy UI fallback occurs only before API upload."""
+    mode=os.environ.get('CO_IMPORT_TRANSPORT','auto').strip().lower()
+    if mode not in {'auto','api','ui'}:
+        raise RuntimeError('CO_IMPORT_TRANSPORT không hợp lệ; chưa nhập file.')
+    if records is not None and responses is not None and mode!='ui':
+        from mwg_import_bridge import import_preview, BridgeUnavailable
+        if job.get('mode')!='preview':
+            raise RuntimeError('API nhập file chỉ dùng trước bước xác nhận; chưa tạo CO.')
+        control=page.get_by_role('combobox',name='Vui lòng chọn trạng thái sản phẩm',exact=True)
+        label=control.input_value().strip()
+        match=re.match(r'^\s*(\d+)\s*-',label)
+        if not match or normalize_status(label)!=normalize_status(job['payload'].get('status','Mới')):
+            raise RuntimeError('Chưa xác minh được trạng thái MWG; chưa nhập file.')
+        alerts.clear();responses.clear()
+        try:
+            response=import_preview(page,output,records,match.group(1),
+                                    on_start=lambda:progress(job,'api_import'))
+        except BridgeUnavailable:
+            if mode=='api':raise
+            progress(job,'api_import_ui_fallback')
+        else:
+            responses.append(response)
+            popup=page.get_by_text('Dữ liệu trong tập tin excel',exact=True)
+            deadline=time.monotonic()+7
+            while True:
+                if alerts:raise RuntimeError('MWG báo lỗi nhập Excel: '+'; '.join(alerts)[-1800:])
+                if popup.is_visible():return popup
+                if time.monotonic()>=deadline:
+                    raise RuntimeError('API đã nhập file nhưng bảng xem trước MWG chưa hiện; chưa tạo CO.')
+                browser_wait(page,100)
+    # UI retry remains only for sites without the compatible API bridge.
+
     for attempt in range(2):
         if attempt:
             progress(job,'retry_import_after_timeout')
@@ -717,7 +748,7 @@ def process(page, job, prepared_id=None, guard=None):
             original_indices=list(range(len(records)))
             while True:
                 responses=[]
-                popup=import_with_retry(page,job,output,alerts,responses=responses)
+                popup=import_with_retry(page,job,output,alerts,responses=responses,records=records)
                 errors=received_import_errors(responses,records)
                 progress(job,'import_response_verified')
                 progress(job,'accept_import')

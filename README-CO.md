@@ -118,3 +118,13 @@ Chỉ chủ bot được mở bước hủy này. Ngoài xác nhận đã kiểm
 Nhật ký `tao_owner_actions` lưu tối đa 30 ngày: mở/quay lại màn hình hủy, đánh dấu kiểm tra (giao diện báo), gửi hủy, từ chối và hủy thành công (máy chủ xác nhận). Ghi thời gian, tài khoản đã xác thực, nhãn loại thiết bị/trình duyệt và mã băm có khóa để phân biệt phiên. Không lưu giá trị gõ sai, IP, User-Agent nguyên văn, cookie, CSRF/token hoặc nội dung yêu cầu. Nhãn thiết bị do trình duyệt báo, không chứng minh người trực tiếp thao tác.
 
 Hủy thành công và nhật ký bắt buộc được ghi trong cùng giao dịch; lỗi ghi nhật ký sẽ không hủy. Giữ nguyên kết quả và lease để tiếp nhận phản hồi MWG về muộn. Không tạo lại yêu cầu. Nhật ký nằm trong chi tiết yêu cầu, chỉ chủ bot được xem.
+
+## API nhập Excel riêng (2026-10-19)
+
+Worker mặc định `CO_IMPORT_TRANSPORT=auto`: nhập Excel bằng `ImportExcel` trong chính phiên MWG đang đăng nhập, lấy tham số và mã chống giả mạo từ bộ xử lý upload của website. Sau khi đối chiếu đúng từng dòng, trạng thái và Note, worker chuyển phản hồi cho bộ xử lý success sẵn có của MWG để mở popup thật; vẫn bấm Đồng ý và kiểm tra bảng chính trước khi trả thông tin xác nhận. Không dùng nhánh `--api` tạo CO, không thay đổi bước Xác nhận/Hủy, thời hạn, phân quyền, tạo CO một lần, giữ trang chờ xác nhận hay kết quả chưa rõ.
+
+Nếu thành phần web chưa tương thích, chỉ chuyển sang đường nhập giao diện **trước khi bắt đầu gửi API**. Sau khi bắt đầu nhập, lỗi mạng/JSON/đối chiếu/đồng bộ bảng sẽ dừng riêng yêu cầu, không tự chuyển đường hay gửi lại. Mỗi API nhập chờ tối đa 15 giây; popup đã nhận dữ liệu chờ tối đa 7 giây. Dòng lỗi nghiệp vụ vẫn được loại theo quy tắc hiện có, các dòng tốt được nhập lại trước xác nhận. `CO_IMPORT_TRANSPORT=ui` là chế độ quay về đường cũ; `api` yêu cầu API và không chuyển về UI.
+
+Kiểm thử: `python -m unittest bao_tri.kiem_thu.test_mwg_import_bridge`. Kiểm thử trình duyệt ngoại tuyến dùng các thư viện công khai MWG đã tải vào thư mục riêng: `CO_IMPORT_BROWSER_FIXTURES=/path/to/fixtures python -m unittest bao_tri.kiem_thu.test_mwg_import_bridge_browser`; thư mục chứa `jquery.js`, `kendo.js`, `controller.js`. Test chạy các callback nhập thật trên máy chủ giả lập loopback, chỉ cho phép ImportExcel, không có phiên đăng nhập hoặc đường tạo CO. Các tài nguyên MWG không đưa vào repository.
+
+Chỉ nạp worker mới khi không còn yêu cầu đang nhập/chờ xác nhận/đang tạo hoặc phản hồi MWG còn chờ; giữ toàn bộ kết quả và hồ sơ đối soát cũ. Không tự thử tạo CO khi triển khai.
