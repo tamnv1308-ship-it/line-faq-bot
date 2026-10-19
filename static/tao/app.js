@@ -3,7 +3,7 @@
   'use strict';
   const main=document.getElementById('main'), nav=document.getElementById('nav');
   const notice=document.getElementById('notice'), progress=document.getElementById('progress');
-  const state={page:'home',me:null,jobs:[],filter:'active',period:'today',offset:0,more:false,job:null,search:'',lookup:null,telegramLink:'',conditions:null,summary:null,locks:[],queueOverview:null,operations:null,cancelPreview:null,unknownReview:null,unknownChecked:false,busy:false,clock:0};
+  const state={page:'home',me:null,jobs:[],filter:'active',period:'today',offset:0,more:false,job:null,search:'',lookup:null,telegramLink:'',conditions:null,summary:null,locks:[],queueOverview:null,operations:null,cancelPreview:null,unknownReview:null,unknownChecked:false,unknownCode:'',busy:false,clock:0};
   let activeRefresh=0, serial=0, timer=null, liffReady=false, config=null;
   const editor={text:'',review:null,scope:'group',options:null,pending:null,openRow:-1,showSource:true};
   const paths={search:'m21 21-5-5M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16',
@@ -233,18 +233,37 @@
   }
   function queue(){return title(state.me.owner?'Yêu cầu CO':'Yêu cầu của tôi')+bulkCancelCard()+`<div class="tao-segments tao-queue-filters" aria-label="Lọc yêu cầu">${[['active','Đang xử lý'],...(state.me.owner?[['waiting','Đang chờ'],['attention','Cần kiểm tra']]:[]),['done','Đã xong'],['all','Tất cả']].map(([v,t])=>`<button data-filter="${v}" aria-pressed="${state.filter===v}">${t}</button>`).join('')}</div>${state.filter==='attention'?'<p class="tao-hint">Các yêu cầu chưa rõ kết quả cần đối soát trên MWG trước khi xử lý tiếp.</p>':''}${state.jobs.length?state.jobs.map(jobCard).join(''):'<div class="tao-empty">Chưa có yêu cầu trong mục này.</div>'}${state.more?'<button class="tao-secondary" data-action="more">Xem thêm</button>':''}<p class="tao-refresh">Tự cập nhật khi màn hình đang mở.</p>`;}
   function rowDetails(row,index,total){return `<div class="tao-info-card">${total>1?`<div class="tao-kicker">Dòng ${index+1} / ${total}</div>`:''}<h2 class="tao-detail-title">${esc(short(row.product_name)||'MSP '+row.product+' · MWG chưa trả tên')}</h2>${row.co?`<button class="tao-copy" data-copy="${esc(row.co)}" aria-label="Sao chép mã CO ${esc(row.co)}">${esc(row.co)} · Sao chép</button>`:''}${row.error?`<p class="tao-long-text">${esc(row.error)}</p>`:''}${[['source','Kho xuất'],['destination','Kho nhận']].map(([key,label])=>`<div class="tao-warehouse"><span>${icon('warehouse')}</span><div><small>${label}</small><strong>${esc(row[key+'_name']?String(row[key+'_name']).startsWith(String(row[key]))?row[key+'_name']:row[key]+' - '+row[key+'_name']:row[key])}</strong></div></div>`).join('')}<div class="tao-field"><span>Số lượng</span><b>${esc(row.quantity)}</b></div><div class="tao-field"><span>Trạng thái</span><b>${esc(row.status||'Mới')}</b></div>${row.conditions?.length?`<div class="tao-kicker tao-note">Điều kiện</div>${row.conditions.map(v=>`<div class="tao-condition ${/^(❌|⚠️)/u.test(v)?'bad':''}">${icon(v.startsWith('✅')?'check':/^(❌|⚠️)/u.test(v)?'x':'box')}<span>${esc(v.replace(/^[✅❌⚠️❓]+\s*/u,''))}</span></div>`).join('')}`:''}${row.note?`<div class="tao-note"><b>Note:</b> ${esc(row.note).replace(/\n/g,'<br>')}</div>`:''}</div>`;}
+  function unknownReady(){
+    const review=state.unknownReview;
+    return !!(state.me?.owner&&review&&state.job?.id===review.id&&state.job.state==='unknown'&&
+      state.job.unknown_resolution?.revision===review.revision&&state.unknownChecked&&
+      state.unknownCode.trim().toLowerCase()===review.id&&!state.busy);
+  }
+  function updateUnknownButton(){
+    const button=main.querySelector('[data-action="unknown-confirm"]');
+    if(button)button.disabled=!unknownReady();
+  }
+  function recordUnknownReview(action,review=state.unknownReview){
+    if(!state.me?.owner||!review)return;
+    // UI observations are supplemental. The server cancellation audit is mandatory.
+    void api('admin/jobs/'+review.id+'/cancel-review',{method:'POST',body:JSON.stringify({action})}).catch(()=>{});
+  }
+  function cancellationAudit(job){
+    if(!state.me.owner||!job.cancellation_actions?.length)return '';
+    return `<section class="tao-info-card"><h2>Nhật ký thao tác hủy</h2><p class="tao-hint">Phiên chủ bot · 30 ngày gần nhất. Thiết bị do trình duyệt báo, không xác định người trực tiếp thao tác.</p>${job.cancellation_actions.map(e=>`<div class="tao-cancel-audit"><strong>${esc(e.label)}</strong><small>${esc(new Date(e.at*1000).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}))} · ${esc(e.client)} · Phiên ${esc(e.session.slice(0,8))}</small>${e.reason?`<p>${esc(e.reason)}</p>`:''}</div>`).join('')}</section>`;
+  }
   function unknownCancelCard(job){
     const resolution=job.unknown_resolution;
     if(!state.me.owner||!resolution)return '';
     if(!resolution.can_cancel)return `<div class="tao-info-card tao-long-text">${esc(resolution.reason)}</div>`;
     const review=state.unknownReview;
-    if(review?.id===job.id)return `<section class="tao-info-card" aria-label="Xác nhận đã kiểm tra MWG"><div class="tao-kicker">Chỉ Tâm 258330</div><h2>Hủy yêu cầu #${esc(job.id)}?</h2><p class="tao-product">${esc(job.requester)} · ${job.rows.length} dòng. Hủy toàn bộ yêu cầu này và giữ lịch sử đối soát.</p><label class="tao-attestation"><input type="checkbox" data-unknown-check ${state.unknownChecked?'checked':''}><span>Tôi đã kiểm tra MWG và xác nhận <strong>chưa có CO ở tất cả ${job.rows.length} dòng</strong> của yêu cầu này.</span></label><div class="tao-inline-actions"><button class="tao-secondary" data-action="unknown-back">Quay lại</button><button class="tao-secondary tao-cancel-all" data-action="unknown-confirm" ${state.unknownChecked?'':'disabled'}>Xác nhận hủy</button></div></section>`;
+    if(review?.id===job.id)return `<section class="tao-info-card" aria-label="Xác nhận đã kiểm tra MWG"><div class="tao-kicker">Chỉ Tâm 258330</div><h2>Hủy yêu cầu #${esc(job.id)}?</h2><p class="tao-product">${esc(job.requester)} · ${job.rows.length} dòng. Hủy toàn bộ yêu cầu này và giữ lịch sử đối soát.</p><label class="tao-attestation"><input type="checkbox" data-unknown-check ${state.unknownChecked?'checked':''}><span>Tôi đã kiểm tra MWG và xác nhận <strong>chưa có CO ở tất cả ${job.rows.length} dòng</strong> của yêu cầu này.</span></label><label class="tao-label" for="unknown-code">Nhập mã yêu cầu để hủy</label><input id="unknown-code" class="tao-cancel-code" type="text" inputmode="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="10" value="${esc(state.unknownCode)}" aria-describedby="unknown-code-hint" placeholder="Nhập đủ 10 ký tự"><p id="unknown-code-hint" class="tao-hint">Nhập đúng mã <strong>${esc(job.id)}</strong>. Chỉ hủy sau khi đã kiểm tra MWG chưa có CO.</p><div class="tao-inline-actions"><button type="button" class="tao-secondary" data-action="unknown-back">Quay lại</button><button type="button" class="tao-secondary tao-cancel-all" data-action="unknown-confirm" data-review-id="${esc(job.id)}" ${unknownReady()?'':'disabled'}>Xác nhận hủy</button></div></section>`;
     return `<section class="tao-info-card"><div class="tao-kicker">Riêng Tâm 258330</div><h2>Đã kiểm tra MWG?</h2><p class="tao-hint">Chỉ hủy khi em đã kiểm tra và chưa có CO ở tất cả dòng. Bot giữ lại lịch sử và không tự tạo lại yêu cầu.</p><button class="tao-secondary tao-cancel-all" data-action="unknown-review">${icon('x')}Hủy sau khi kiểm tra MWG</button></section>`;
   }
   function detail(){
     const job=state.job;if(!job)return '<div class="tao-empty">Đang tải yêu cầu…</div>';
     const processing=['queued','verified_queued','running','submitting'].includes(job.state);
-    return title(job.state==='draft'?'Xác nhận yêu cầu':processing?'Đang tạo CO':'Kết quả yêu cầu','#'+job.id+' · '+job.requester)+`<div class="tao-section-heading">${badge(job)}${job.expires_at?`<span class="tao-badge" data-countdown="${job.expires_at}"></span>`:''}</div>${processing?'<div class="tao-info-card tao-long-text">Đã xác nhận. Kết quả CO sẽ hiện tại đây khi MWG xử lý xong.</div>':''}${job.state==='unknown'?'<div class="tao-info-card tao-long-text">MWG chưa trả đủ kết quả. Cần kiểm tra trên MWG trước khi xử lý tiếp; riêng Tâm có thể hủy sau khi xác nhận chưa có CO.</div>':''}${job.rows.map((r,i)=>rowDetails(r,i,job.rows.length)).join('')}${job.skipped_duplicates?.length?`<div class="tao-info-card">Đã bỏ qua ${job.skipped_duplicates.length} dòng trùng theo quy tắc hiện tại.</div>`:''}${job.skipped_errors?.length?`<div class="tao-info-card">Đã loại ${job.skipped_errors.length} dòng không hợp lệ.${state.me.owner?job.skipped_errors.map(r=>`<p><strong>${esc(r.source)} → ${esc(r.destination)}</strong><br>MSP ${esc(r.product)} · SL ${esc(r.quantity)}<br>${esc(r.error)}</p>`).join(''):' Xem tin bot để biết lỗi từng dòng.'}</div>`:''}${job.can_cancel||job.can_confirm?`<div class="tao-actions">${job.can_cancel?'<button class="tao-secondary" data-action="cancel">Hủy</button>':''}${job.can_confirm?'<button class="tao-primary" data-action="confirm">'+icon('check')+'Xác nhận</button>':''}</div>`:''}${unknownCancelCard(job)}${state.me.owner?diagnostics(job.diagnostics):''}${job.owner_cancelled_at?`<div class="tao-info-card tao-long-text">Tâm đã xác nhận kiểm tra MWG và chưa có CO lúc ${date(job.owner_cancelled_at)}. Đã lưu lịch sử hủy.${job.state!=='cancelled'?' Kết quả mới từ MWG được hiển thị phía trên.':''}</div>`:''}${job.state==='draft'&&!job.expires_at?'<p class="tao-hint">Bot đang gửi thông tin xác nhận về chat của yêu cầu. Vui lòng chờ cập nhật.</p>':''}`;
+    return title(job.state==='draft'?'Xác nhận yêu cầu':processing?'Đang tạo CO':'Kết quả yêu cầu','#'+job.id+' · '+job.requester)+`<div class="tao-section-heading">${badge(job)}${job.expires_at?`<span class="tao-badge" data-countdown="${job.expires_at}"></span>`:''}</div>${processing?'<div class="tao-info-card tao-long-text">Đã xác nhận. Kết quả CO sẽ hiện tại đây khi MWG xử lý xong.</div>':''}${job.state==='unknown'?'<div class="tao-info-card tao-long-text">MWG chưa trả đủ kết quả. Cần kiểm tra trên MWG trước khi xử lý tiếp; riêng Tâm có thể hủy sau khi xác nhận chưa có CO.</div>':''}${job.rows.map((r,i)=>rowDetails(r,i,job.rows.length)).join('')}${job.skipped_duplicates?.length?`<div class="tao-info-card">Đã bỏ qua ${job.skipped_duplicates.length} dòng trùng theo quy tắc hiện tại.</div>`:''}${job.skipped_errors?.length?`<div class="tao-info-card">Đã loại ${job.skipped_errors.length} dòng không hợp lệ.${state.me.owner?job.skipped_errors.map(r=>`<p><strong>${esc(r.source)} → ${esc(r.destination)}</strong><br>MSP ${esc(r.product)} · SL ${esc(r.quantity)}<br>${esc(r.error)}</p>`).join(''):' Xem tin bot để biết lỗi từng dòng.'}</div>`:''}${job.can_cancel||job.can_confirm?`<div class="tao-actions">${job.can_cancel?'<button class="tao-secondary" data-action="cancel">Hủy</button>':''}${job.can_confirm?'<button class="tao-primary" data-action="confirm">'+icon('check')+'Xác nhận</button>':''}</div>`:''}${unknownCancelCard(job)}${cancellationAudit(job)}${state.me.owner?diagnostics(job.diagnostics):''}${job.owner_cancelled_at?`<div class="tao-info-card tao-long-text">Phiên chủ bot đã gửi xác nhận kiểm tra MWG chưa có CO lúc ${date(job.owner_cancelled_at)}. Đã lưu lịch sử hủy.${job.state!=='cancelled'?' Kết quả mới từ MWG được hiển thị phía trên.':''}</div>`:''}${job.state==='draft'&&!job.expires_at?'<p class="tao-hint">Bot đang gửi thông tin xác nhận về chat của yêu cầu. Vui lòng chờ cập nhật.</p>':''}`;
   }
   const secondsLabel=value=>value===null||value===undefined?'Chưa có số đo':Number(value)<60?number(Math.round(Number(value)*10)/10)+' giây':number(Math.round(Number(value)/6)/10)+' phút';
   function diagnostics(data){
@@ -282,7 +301,7 @@
   }
   async function refresh(quiet=false){
     if(!state.me||state.busy||(quiet&&(activeRefresh||state.unknownReview||state.page==='compose'||state.page==='queue'&&state.jobs.length>20)))return;
-    if(!quiet){state.unknownReview=null;state.unknownChecked=false;}
+    if(!quiet){state.unknownReview=null;state.unknownChecked=false;state.unknownCode='';}
     activeRefresh++;
     const generation=++serial,page=state.page;
     if(!quiet){loading(true);error('');}
@@ -322,7 +341,7 @@
     finally{activeRefresh--;if(generation===serial)loading(false);}
   }
   async function go(page,jid){
-    ++serial;state.page=page;state.cancelPreview=null;state.unknownReview=null;state.unknownChecked=false;
+    ++serial;state.page=page;state.cancelPreview=null;state.unknownReview=null;state.unknownChecked=false;state.unknownCode='';
     if(page==='queue'){state.filter='active';state.offset=0;state.jobs=[];state.queueOverview=null;}
     if(page==='detail')state.job={id:jid,rows:[],state:'loading',label:'Đang tải'};
     render();await refresh();
@@ -415,15 +434,17 @@
           await mutate('jobs/'+state.job.id+'/cancel');await refresh(true);
         }break;
       case 'unknown-review':
-        if(state.me.owner&&state.job?.unknown_resolution?.can_cancel){
-          state.unknownReview={id:state.job.id,revision:state.job.unknown_resolution.revision};state.unknownChecked=false;render();
+        if(event.isTrusted&&state.me.owner&&state.job?.unknown_resolution?.can_cancel){
+          state.unknownReview={id:state.job.id,revision:state.job.unknown_resolution.revision};state.unknownChecked=false;state.unknownCode='';
+          recordUnknownReview('review_opened');render();
         }break;
-      case 'unknown-back':state.unknownReview=null;state.unknownChecked=false;render();break;
+      case 'unknown-back':
+        recordUnknownReview('review_closed');state.unknownReview=null;state.unknownChecked=false;state.unknownCode='';render();break;
       case 'unknown-confirm':{
-        const review=state.unknownReview,checked=state.unknownChecked;
-        if(state.me.owner&&review&&checked){
-          state.unknownReview=null;state.unknownChecked=false;
-          await mutate('admin/jobs/'+review.id+'/cancel-unknown',{revision:review.revision,checked_mwg_no_co:true});await refresh(true);
+        const review=state.unknownReview,code=state.unknownCode;
+        if(event.isTrusted&&unknownReady()&&button.dataset.reviewId===review.id){
+          state.unknownReview=null;state.unknownChecked=false;state.unknownCode='';
+          await mutate('admin/jobs/'+review.id+'/cancel-unknown',{revision:review.revision,checked_mwg_no_co:true,confirmation_code:code});await refresh(true);
         }break;}
       case 'reset-worker':
         if(state.me.owner&&window.confirm('Làm mới trang làm việc MWG? Giữ nguyên hàng chờ và các lệnh chưa rõ kết quả; không tạo lại CO.')){await mutate('admin/reset-worker',{});await refresh(true);}break;
@@ -450,13 +471,18 @@
     if(state.page==='forward'&&basket.edit&&Object.hasOwn(fieldLabels,target.dataset.forwardField))
       basket.edit.values[target.dataset.forwardField]=target.value;
   }
-  main.addEventListener('input',event=>{if(state.page==='compose')composeEdit(event.target);forwardEdit(event.target);});
+  main.addEventListener('input',event=>{
+    if(event.target.id==='unknown-code'&&event.isTrusted&&state.unknownReview){
+      state.unknownCode=event.target.value;updateUnknownButton();
+    }
+    if(state.page==='compose')composeEdit(event.target);forwardEdit(event.target);
+  });
   main.addEventListener('change',event=>{
     forwardEdit(event.target);
     if(state.page==='compose')composeEdit(event.target);
-    if(event.target.matches('[data-unknown-check]')){
+    if(event.target.matches('[data-unknown-check]')&&event.isTrusted&&state.unknownReview){
       state.unknownChecked=event.target.checked===true;
-      const button=main.querySelector('[data-action="unknown-confirm"]');if(button)button.disabled=!state.unknownChecked||state.busy;
+      recordUnknownReview(state.unknownChecked?'review_checked':'review_unchecked');updateUnknownButton();
     }
   });
   main.addEventListener('submit',async event=>{

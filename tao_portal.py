@@ -23,6 +23,7 @@ from tao_compose import parse_editable, validate_rows, queue_payload, STATUSES
 from co_forward import ForwardDrafts
 import telegram_bridge
 import co_observability as observe
+import tao_audit
 from co_health import readiness
 from co_results import items, decode_results
 from co_regions import region_label, cluster_condition, stores
@@ -30,7 +31,7 @@ from co_conditions import load_conditions, fold, condition_text
 from co_summary import aggregate, period, TZ
 from co_summary_view import details as summary_details
 
-VERSION = 6
+VERSION = 7
 COOKIE = '__Host-tao_session'
 SESSION_SECONDS = 900
 ROOT = Path(__file__).resolve().parent
@@ -235,7 +236,9 @@ def install(app, reply, default_users=()):
             result['rows'].append(public)
         if details:
             if user['uid']==PRIVATE_CO_OWNER:
-                with q.db() as db:events=observe.read_events(db,job['id'])
+                with q.db() as db:
+                    events=observe.read_events(db,job['id'])
+                    result['cancellation_actions']=tao_audit.read(db,job['id'])
                 result['diagnostics']=observe.timeline(job,events)
             result['skipped_duplicates']=payload.get('skipped_duplicates',[])
             result['skipped_errors']=payload.get('skipped_errors',[])
@@ -639,33 +642,64 @@ def install(app, reply, default_users=()):
                  'Yêu cầu đang xử lý, chưa rõ kết quả và CO đã tạo được giữ nguyên.')
         return jsonify(cancelled=len(rows),message=message)
 
+    @bp.post('/api/admin/jobs/<jid>/cancel-review')
+    def cancel_review(jid):
+        user=identity(True);require_owner(user);rate(('cancel-review',user['uid']),60)
+        if not re.fullmatch(r'[a-f0-9]{10}',jid):raise PortalError('Mã yêu cầu không hợp lệ.',404)
+        data=body();action=data.get('action')
+        if action not in {'review_opened','review_closed','review_checked','review_unchecked'}:
+            raise PortalError('Thao tác nhật ký không hợp lệ.')
+        context=tao_audit.context(user,request.headers.get('User-Agent',''),secret)
+        with q.db() as db:
+            row=db.execute('SELECT state FROM jobs WHERE id=?',(jid,)).fetchone()
+            if not row:raise PortalError('Không tìm thấy yêu cầu.',404)
+            if row['state']!='unknown':raise PortalError('Yêu cầu không còn ở trạng thái chưa rõ kết quả.',409)
+            tao_audit.record(db,jid,action,context)
+        return jsonify(recorded=True)
+
     @bp.post('/api/admin/jobs/<jid>/cancel-unknown')
     def cancel_unknown(jid):
         user=identity(True);require_owner(user);rate(('cancel-unknown',user['uid']),10)
         if not re.fullmatch(r'[a-f0-9]{10}',jid):raise PortalError('Mã yêu cầu không hợp lệ.',404)
         data=body();revision=data.get('revision')
-        if data.get('checked_mwg_no_co') is not True:
-            raise PortalError('Cần xác nhận đã kiểm tra MWG và chưa có CO ở tất cả dòng của yêu cầu.')
-        if not isinstance(revision,str) or not re.fullmatch(r'[0-9a-f]{64}',revision):
-            raise PortalError('Hãy mở lại chi tiết yêu cầu trước khi hủy.')
+        code=data.get('confirmation_code');error=None
+        # Never trust the disabled UI button. Old tabs and direct callers must
+        # provide the full code too. Do not persist the entered value.
+        if not isinstance(code,str) or code.strip().lower()!=jid:
+            error=('Nhập đúng đủ 10 ký tự mã yêu cầu trước khi hủy.',400,'code_mismatch')
+        elif data.get('checked_mwg_no_co') is not True:
+            error=('Cần xác nhận đã kiểm tra MWG và chưa có CO ở tất cả dòng của yêu cầu.',400,'not_attested')
+        elif not isinstance(revision,str) or not re.fullmatch(r'[0-9a-f]{64}',revision):
+            error=('Hãy mở lại chi tiết yêu cầu trước khi hủy.',400,'invalid_revision')
+        context=tao_audit.context(user,request.headers.get('User-Agent',''),secret)
         with q.db() as db:
+            tao_audit.record(db,jid,'cancel_requested',context)
             row=db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
-            if not row:raise PortalError('Không tìm thấy yêu cầu.',404)
-            job=dict(row)
-            if not hmac.compare_digest(revision,unknown_revision(job)):
-                raise PortalError('Kết quả đã thay đổi. Tải lại và kiểm tra MWG trước khi hủy.',409)
-            reason=unknown_cancel_reason(job)
-            if reason:raise PortalError(reason,409)
-            if db.execute('SELECT 1 FROM co_note_outbox WHERE job_id=?',(jid,)).fetchone():
-                raise PortalError('Đã có kết quả CO được ghi nhận. Không thể hủy yêu cầu này.',409)
-            now=time.time();payload=json.loads(job['payload'])
-            payload['owner_no_co_cancellation']={'actor':user['uid'],'cancelled_at':now,
-                'checked_mwg_no_co':True,'previous_state':job['state'],'previous_result':job['result'],
-                'revision':revision}
-            # Keep the lease only for authenticated late result reconciliation, never for a new claim.
-            db.execute("UPDATE jobs SET state='cancelled',payload=?,notified=1,updated=? WHERE id=?",
-                       (json.dumps(payload,ensure_ascii=False),now,jid))
-            db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+            job=dict(row) if row else None
+            if not error and not job:
+                error=('Không tìm thấy yêu cầu.',404,'not_found')
+            if not error and not hmac.compare_digest(revision,unknown_revision(job)):
+                error=('Kết quả đã thay đổi. Tải lại và kiểm tra MWG trước khi hủy.',409,'stale_revision')
+            if not error:
+                reason=unknown_cancel_reason(job)
+                if reason:error=(reason,409,'not_cancellable')
+            if not error and db.execute('SELECT 1 FROM co_note_outbox WHERE job_id=?',(jid,)).fetchone():
+                error=('Đã có kết quả CO được ghi nhận. Không thể hủy yêu cầu này.',409,'co_evidence')
+            if error:
+                tao_audit.record(db,jid,'cancel_rejected',context,error[2])
+            else:
+                now=time.time();payload=json.loads(job['payload'])
+                event_id=tao_audit.record(db,jid,'cancelled',context,now=now)
+                payload['owner_no_co_cancellation']={'actor':user['uid'],'cancelled_at':now,
+                    'checked_mwg_no_co':True,'previous_state':job['state'],'previous_result':job['result'],
+                    'revision':revision,'confirmation_code_verified':True,'audit_event_id':event_id,
+                    'session_tag':context['session_tag'],'client':context['client'],'channel':'liff'}
+                # Keep the lease for authenticated late results, never for a new claim.
+                db.execute("UPDATE jobs SET state='cancelled',payload=?,notified=1,updated=? WHERE id=?",
+                           (json.dumps(payload,ensure_ascii=False),now,jid))
+                db.execute('DELETE FROM preview_replies WHERE job_id=?',(jid,))
+        # Reject after committing the rejection audit; job data stays untouched.
+        if error:raise PortalError(error[0],error[1])
         return jsonify(message=f'Đã hủy yêu cầu #{jid} theo xác nhận của Tâm: đã kiểm tra MWG, chưa có CO. Đã lưu lịch sử đối soát.',
                        job=public_job(get_job(jid,user),user,True),server_time=time.time())
 

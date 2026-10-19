@@ -69,6 +69,8 @@ def cleanup(queue,directory):
         from co_forward import cleanup as cleanup_forward_drafts
         cleanup_forward_drafts(db,cutoff)
         db.execute('DELETE FROM co_ops_events WHERE received<?',(cutoff,))
+        from tao_audit import cleanup as cleanup_owner_actions
+        cleanup_owner_actions(db,cutoff)
         ids=[r['id'] for r in db.execute("SELECT id FROM jobs WHERE state IN ('succeeded','failed','cancelled','expired') AND created<? AND updated<?",(cutoff,cutoff))]
         for jid in ids:
             row=db.execute('SELECT event FROM jobs WHERE id=?',(jid,)).fetchone()

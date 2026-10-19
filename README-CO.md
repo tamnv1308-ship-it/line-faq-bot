@@ -110,3 +110,11 @@ Kết quả chưa gửi được lưu tại `.co-mac/pending.json`. LINE đượ
 - 60 giây là ngưỡng phát hiện bộ điều khiển ngừng phản hồi, không phải thời gian chờ tạo CO. Thời gian nhận kết quả CO vẫn 30 giây tính từ click thật. Khi MWG chậm nhưng vòng điều khiển vẫn phản hồi, bot vẫn phân biệt là đang chờ MWG.
 - Các kiểm tra này chỉ báo tình trạng và ngăn nhận thêm khi bộ điều khiển lỗi; không tự đóng/reload trang, reset, hủy yêu cầu, phát sinh CO hoặc tạo lại lệnh chưa rõ kết quả. Quy tắc không reload khi chờ xác nhận/đang tạo CO giữ nguyên.
 
+
+# Hủy lệnh chưa rõ kết quả trên Công cụ Táo
+
+Chỉ chủ bot được mở bước hủy này. Ngoài xác nhận đã kiểm tra MWG chưa có CO ở tất cả dòng, phải nhập đủ mã yêu cầu 10 ký tự. Máy chủ kiểm tra mã, phiên/CSRF, quyền, phiên bản dữ liệu và dấu vết CO; tab cũ thiếu mã cũng bị từ chối. Xác nhận/Hủy thông thường và quyền Telegram giữ nguyên.
+
+Nhật ký `tao_owner_actions` lưu tối đa 30 ngày: mở/quay lại màn hình hủy, đánh dấu kiểm tra (giao diện báo), gửi hủy, từ chối và hủy thành công (máy chủ xác nhận). Ghi thời gian, tài khoản đã xác thực, nhãn loại thiết bị/trình duyệt và mã băm có khóa để phân biệt phiên. Không lưu giá trị gõ sai, IP, User-Agent nguyên văn, cookie, CSRF/token hoặc nội dung yêu cầu. Nhãn thiết bị do trình duyệt báo, không chứng minh người trực tiếp thao tác.
+
+Hủy thành công và nhật ký bắt buộc được ghi trong cùng giao dịch; lỗi ghi nhật ký sẽ không hủy. Giữ nguyên kết quả và lease để tiếp nhận phản hồi MWG về muộn. Không tạo lại yêu cầu. Nhật ký nằm trong chi tiết yêu cầu, chỉ chủ bot được xem.

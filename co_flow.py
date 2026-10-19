@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 import time
 import co_observability as observe
+import tao_audit
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
@@ -185,6 +186,7 @@ class Queue:
             ''')
             db.execute("CREATE TABLE IF NOT EXISTS co_worker_resets (id TEXT PRIMARY KEY, requested REAL NOT NULL, consumed REAL)")
             observe.schema(db)
+            tao_audit.schema(db)
             co_forward.schema(db)
 
     @contextmanager

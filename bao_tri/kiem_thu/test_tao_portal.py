@@ -178,7 +178,7 @@ class PortalTests(unittest.TestCase):
 
     def unknown_review(self,jid):
         return {'revision':self.call('jobs/'+jid).json['job']['unknown_resolution']['revision'],
-                'checked_mwg_no_co':True}
+                'checked_mwg_no_co':True,'confirmation_code':jid}
 
     def test_unknown_cancel_only_owner_not_member_or_admin(self):
         jid=self.unknown_job();path='admin/jobs/'+jid+'/cancel-unknown'
@@ -239,7 +239,7 @@ class PortalTests(unittest.TestCase):
         for state in ('draft','queued','preview_running','running','submitting','succeeded','failed','cancelled','expired'):
             jid=self.job(state=state)
             with self.q.db() as db:job=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
-            data={'revision':portal.unknown_revision(job),'checked_mwg_no_co':True}
+            data={'revision':portal.unknown_revision(job),'checked_mwg_no_co':True,'confirmation_code':jid}
             self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
             self.assertEqual(self.state(jid),state)
 
@@ -251,7 +251,7 @@ class PortalTests(unittest.TestCase):
         for result,payload in cases:
             jid=self.unknown_job(result,payload);job=self.call('jobs/'+jid).json['job']
             self.assertFalse(job['unknown_resolution']['can_cancel'])
-            data={'revision':job['unknown_resolution']['revision'],'checked_mwg_no_co':True}
+            data={'revision':job['unknown_resolution']['revision'],'checked_mwg_no_co':True,'confirmation_code':jid}
             self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
             self.assertEqual(self.state(jid),'unknown')
 
@@ -308,6 +308,100 @@ class PortalTests(unittest.TestCase):
         self.assertFalse(self.q.update(jid,'unknown-lease','succeeded',json.dumps([co,co])))
         self.assertTrue(self.q.update(jid,'unknown-lease','succeeded',json.dumps([failed,co])))
         self.assertEqual(self.state(jid),'succeeded')
+
+    def audit_rows(self,jid):
+        with self.q.db() as db:
+            return [dict(r) for r in db.execute('SELECT * FROM tao_owner_actions WHERE job_id=? ORDER BY at',(jid,))]
+
+    def test_unknown_cancel_full_code_required_and_never_stored(self):
+        jid=self.unknown_job();self.login(OWNER);data=self.unknown_review(jid)
+        path='admin/jobs/'+jid+'/cancel-unknown'
+        with self.q.db() as db:before=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+        for value in (None,'',123,False,jid[:4],jid+'0','private-input-not-to-log'):
+            self.assertEqual(self.call(path,'POST',dict(data,confirmation_code=value)).status_code,400)
+        with self.q.db() as db:after=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+        self.assertEqual(before,after)
+        audit=self.audit_rows(jid)
+        self.assertEqual(sum(r['action']=='cancel_rejected' for r in audit),7)
+        self.assertNotIn('private-input-not-to-log',json.dumps(audit))
+        response=self.call(path,'POST',dict(data,confirmation_code=' '+jid.upper()+' '))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.state(jid),'cancelled')
+        self.assertTrue(response.json['job']['cancellation_actions'])
+
+    def test_opening_detail_and_refresh_never_creates_cancel_audit(self):
+        jid=self.unknown_job();self.login(OWNER)
+        for _ in range(5):self.assertEqual(self.call('jobs/'+jid).status_code,200)
+        self.assertEqual(self.state(jid),'unknown');self.assertEqual(self.audit_rows(jid),[])
+
+    def test_review_events_never_change_jobs_and_are_owner_only(self):
+        jid=self.unknown_job();path='admin/jobs/'+jid+'/cancel-review'
+        self.login(MEMBER)
+        self.assertEqual(self.call(path,'POST',{'action':'review_opened'}).status_code,403)
+        self.login(OWNER)
+        with self.q.db() as db:before=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+        for action in ('review_opened','review_checked','review_unchecked','review_closed'):
+            self.assertEqual(self.call(path,'POST',{'action':action}).status_code,200)
+        self.assertEqual(self.call(path,'POST',{'action':'cancelled'}).status_code,400)
+        self.assertEqual(self.call(path,'POST',{'action':'review_opened'},headers={'X-Tao-CSRF':'wrong'}).status_code,403)
+        with self.q.db() as db:after=dict(db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone())
+        self.assertEqual(before,after);self.assertEqual(len(self.audit_rows(jid)),4)
+        self.login(MEMBER)
+        self.assertNotIn('cancellation_actions',self.call('jobs/'+jid).json['job'])
+
+    def test_audit_labels_device_without_secrets_or_raw_headers(self):
+        jid=self.unknown_job();self.login(OWNER)
+        data=self.unknown_review(jid);headers={'User-Agent':'iPhone LIFF private-header-sentinel'}
+        self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data,headers=headers)
+        rows=self.audit_rows(jid);raw=json.dumps(rows)
+        self.assertEqual([r['action'] for r in rows],['cancel_requested','cancelled'])
+        self.assertEqual(rows[0]['client'],'LINE/LIFF · iPhone')
+        self.assertEqual(rows[0]['actor'],OWNER)
+        self.assertEqual(len(rows[0]['session_tag']),16)
+        self.assertNotIn(self.csrf,raw);self.assertNotIn('private-header-sentinel',raw)
+        self.assertNotIn('previous_result',raw)
+        with self.q.db() as db:
+            payload=json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(jid,)).fetchone()['payload'])
+        self.assertTrue(payload['owner_no_co_cancellation']['confirmation_code_verified'])
+        self.assertEqual(payload['owner_no_co_cancellation']['audit_event_id'],rows[-1]['event_id'])
+
+    def test_cancel_fails_closed_when_success_audit_cannot_be_saved(self):
+        jid=self.unknown_job();self.login(OWNER);data=self.unknown_review(jid)
+        original=portal.tao_audit.record
+        def fail_success(db,jid,action,*args,**kwargs):
+            if action=='cancelled':raise RuntimeError('simulated unavailable audit')
+            return original(db,jid,action,*args,**kwargs)
+        with patch.object(portal.tao_audit,'record',side_effect=fail_success):
+            response=self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data)
+        self.assertEqual(response.status_code,503)
+        self.assertEqual(self.state(jid),'unknown');self.assertEqual(self.audit_rows(jid),[])
+
+    def test_audit_does_not_change_revision_and_stale_attempt_is_logged(self):
+        jid=self.unknown_job();self.login(OWNER);data=self.unknown_review(jid)
+        self.call('admin/jobs/'+jid+'/cancel-review','POST',{'action':'review_opened'})
+        self.assertEqual(self.unknown_review(jid)['revision'],data['revision'])
+        with self.q.db() as db:db.execute('UPDATE jobs SET result=? WHERE id=?',('new evidence',jid))
+        self.assertEqual(self.call('admin/jobs/'+jid+'/cancel-unknown','POST',data).status_code,409)
+        self.assertEqual(self.audit_rows(jid)[-1]['reason'],'stale_revision')
+        self.assertEqual(self.state(jid),'unknown')
+
+    def test_normal_confirm_cancel_does_not_require_a_code(self):
+        self.login(OWNER)
+        jid=self.job(state='draft')
+        self.assertEqual(self.call('jobs/'+jid+'/confirm','POST',{}).status_code,200)
+        self.assertIn(self.state(jid),('queued','verified_queued'))
+        jid=self.job(state='draft')
+        self.assertEqual(self.call('jobs/'+jid+'/cancel','POST',{}).status_code,200)
+        self.assertEqual(self.state(jid),'cancelled')
+        self.assertEqual(self.audit_rows(jid),[])
+
+    def test_old_actions_removed_without_altering_job(self):
+        jid=self.unknown_job();self.login(OWNER)
+        self.call('admin/jobs/'+jid+'/cancel-review','POST',{'action':'review_opened'})
+        with self.q.db() as db:db.execute('UPDATE tao_owner_actions SET at=?',(time.time()-31*86400,))
+        self.call('admin/jobs/'+jid+'/cancel-review','POST',{'action':'review_closed'})
+        self.assertEqual([r['action'] for r in self.audit_rows(jid)],['review_closed'])
+        self.assertEqual(self.state(jid),'unknown')
 
     def test_bulk_cancel_only_owner_even_for_other_admins(self):
         jid=self.job(state='queued')

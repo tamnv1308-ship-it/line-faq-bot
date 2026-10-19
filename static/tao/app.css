@@ -181,3 +181,7 @@
 .tao-forward-remove button{font-size:13px;min-height:38px}
 #forward-conflict{border-left:4px solid #d99a28}
 .tao-compose-row-actions{flex-wrap:wrap}
+
+#tao-app .tao-phone .tao-cancel-code{width:100%;min-height:46px;padding:10px 12px;border:1px solid var(--tao-line);border-radius:10px;background:var(--tao-paper);color:var(--tao-ink);font-size:16px;letter-spacing:1px;margin-bottom:8px}
+#tao-app .tao-phone .tao-cancel-audit{border-top:1px solid var(--tao-line);padding:10px 0;font-size:12px}
+#tao-app .tao-phone .tao-cancel-audit small{display:block;color:var(--tao-muted);margin-top:4px;overflow-wrap:anywhere}
