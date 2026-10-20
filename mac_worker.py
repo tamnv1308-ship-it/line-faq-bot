@@ -80,10 +80,16 @@ def upload_excel(page, output):
     chooser.value.set_files(str(output))
 
 def import_with_retry(page, job, output, alerts, responses=None, records=None):
-    """Prefer import-only API; legacy UI fallback occurs only before API upload."""
-    mode=os.environ.get('CO_IMPORT_TRANSPORT','auto').strip().lower()
+    """Use the site's native upload by default; API bridge is explicit opt-in.
+
+    The API preparation callback failed on production before sending the file.
+    Keep it out of normal intake until verified against the live widget contract.
+    """
+    mode=os.environ.get('CO_IMPORT_TRANSPORT','ui').strip().lower()
     if mode not in {'auto','api','ui'}:
         raise RuntimeError('CO_IMPORT_TRANSPORT không hợp lệ; chưa nhập file.')
+    if job.get('mode')=='create' and records is not None and responses is not None:
+        raise RuntimeError('Nhập file chỉ dùng trước bước xác nhận; chưa tạo CO.')
     if records is not None and responses is not None and mode!='ui':
         from mwg_import_bridge import import_preview, BridgeUnavailable
         if job.get('mode')!='preview':
