@@ -41,3 +41,17 @@ jobs:
           node-version: '22'
       - name: Verify cloud login DOM and requests
         run: node bao_tri/kiem_thu/check_cloud_login.cjs
+      - name: Check cloud connectivity to the configured MWG services
+        run: |
+          python - <<'PY'
+          import json,socket,time
+          for host in ('baocao.dienmayxanh.com','authkey.dmx.vn'):
+              started=time.monotonic()
+              try:
+                  with socket.create_connection((host,443),timeout=10):
+                      result={'host':host,'tcp443':'reachable'}
+              except OSError as error:
+                  result={'host':host,'tcp443':'unreachable','error_class':type(error).__name__}
+              result['seconds']=round(time.monotonic()-started,3)
+              print(json.dumps(result),flush=True)
+          PY
