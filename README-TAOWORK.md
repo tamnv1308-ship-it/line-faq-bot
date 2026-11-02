@@ -1,4 +1,10 @@
-# TáoWork chạy độc lập trên Render
+# TáoWork trên Render
+
+## Trạng thái nghiệm thu 02/11/2026
+
+Đã chuyển tài khoản đăng nhập riêng và lịch sử để xem trên cloud. Runtime lấy số/gửi báo cáo chưa kích hoạt: TCP 443 tới baocao.dienmayxanh.com và authkey.dmx.vn hết thời gian từ GitHub Actions; Render cũng hết thời gian kết nối MWG. Cùng API trên Mac đọc được. Chưa hoàn thành dry-run lấy số thật trên Render, chưa gửi Telegram từ cloud, chưa tắt báo cáo Mac. Cần đường kết nối MWG được cho phép từ nơi chạy cloud trước khi cutover. Bộ kiểm thử phần mềm đạt không đồng nghĩa kết nối production đạt.
+
+## Thiết kế và điều kiện kích hoạt
 
 Dùng repository và service line-faq-bot hiện có. Dashboard `/tao/dashboard/` đăng nhập bằng tài khoản/mật khẩu TáoWork riêng, không dùng LINE. Cookie `__Host-taowork_session` tách hoàn toàn khỏi cổng CO. Hash scrypt của tài khoản đã có được chuyển một lần qua endpoint khởi tạo có bearer xác thực; không đưa tài khoản, mật khẩu, hash, session MWG, cấu hình Telegram hoặc số liệu lên Git. Không có trang đăng ký/reset mật khẩu công khai.
 

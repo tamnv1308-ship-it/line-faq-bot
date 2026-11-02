@@ -8,6 +8,7 @@ import hmac
 import json
 import math
 import os
+import sqlite3
 from pathlib import Path
 import tempfile
 
@@ -144,6 +145,28 @@ def install(bp, identity, require_owner, error):
         owner()
         if name not in {'analytics', 'revenue', 'status'}:
             raise error('Không tìm thấy nội dung.', 404)
+        # Once migrated, read the persistent cloud history itself. A Mac
+        # snapshot callback can neither supply nor overwrite these reports.
+        if (directory()/'report/.private/sales-history.sqlite3').is_file():
+            try:
+                from cloud_analytics.business_analytics import load_business
+                from cloud_analytics.revenue_report import load_revenue
+                if name == 'analytics':
+                    payload = load_business()
+                else:
+                    payload = load_revenue()
+                if name == 'status':
+                    return jsonify(schema=1, cutoff=payload['cutoff'], source_as_of=payload['source_as_of'],
+                                   received_at=payload['source_as_of'], source_mode='cloud_stored_history',
+                                   mac_required=False)
+                response = jsonify(payload)
+                if request.accept_encodings['gzip'] > 0:
+                    response.set_data(gzip.compress(response.get_data(), compresslevel=5, mtime=0))
+                    response.headers['Content-Encoding'] = 'gzip'
+                response.headers['Vary'] = 'Accept-Encoding'
+                return response
+            except (OSError, ValueError, sqlite3.Error):
+                raise error('Chưa đọc được lịch sử đã lưu trên cloud.', 503) from None
         data = snapshot()
         if name == 'status':
             return jsonify(schema=1, received_at=data['received_at'], sha256=data['sha256'],
@@ -159,7 +182,8 @@ def install(bp, identity, require_owner, error):
     def dashboard_upload():
         # This fixed, data-only endpoint uses the already installed Mac worker
         # identity. It cannot read sessions or issue CO/report/send commands.
-        if (directory()/'runtime-enabled.json').exists():
+        if ((directory()/'runtime-enabled.json').exists()
+                or (directory()/'report/.private/sales-history.sqlite3').is_file()):
             raise error('Dashboard đã chạy độc lập trên cloud.', 409)
         token = os.getenv('CO_WORKER_TOKEN', '')
         if os.getenv('CO_ENABLED') != '1' or len(token) < 32:

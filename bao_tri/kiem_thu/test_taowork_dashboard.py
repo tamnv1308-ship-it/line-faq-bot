@@ -98,3 +98,11 @@ class DashboardTests(unittest.TestCase):
   runtime.atomic(self.root/'report/.private/last-manual-run.json',{'request_id':jid,'state':'sending'})
   with patch.object(runtime,'invoke',side_effect=TimeoutError):runtime.run_action(self.root,'report.run',jid)
   with runtime.state_db(self.root) as db:self.assertEqual(db.execute('SELECT state FROM actions').fetchone()[0],'unknown')
+
+ def test_cloud_history_reads_without_mac_and_rejects_snapshot(self):
+  history=self.root/'report/.private/sales-history.sqlite3';history.parent.mkdir(parents=True,exist_ok=True);history.touch()
+  self.login()
+  with patch('cloud_analytics.revenue_report.load_revenue',return_value=self.payload['revenue']):
+   response=self.call('api/revenue');self.assertEqual(response.status_code,200);self.assertEqual(response.json,self.payload['revenue'])
+   self.assertFalse(self.call('api/status').json['mac_required'])
+  self.assertEqual(self.upload().status_code,409)
