@@ -147,7 +147,7 @@ def install(bp, identity, require_owner, error):
         data = snapshot()
         if name == 'status':
             return jsonify(schema=1, received_at=data['received_at'], sha256=data['sha256'],
-                           cutoff=data['data']['revenue']['cutoff'], mac_required=True)
+                           cutoff=data['data']['revenue']['cutoff'], mac_required=not (directory()/'runtime-enabled.json').exists())
         response = jsonify(data['data'][name])
         if request.accept_encodings['gzip'] > 0:
             response.set_data(gzip.compress(response.get_data(), compresslevel=5, mtime=0))
@@ -159,6 +159,8 @@ def install(bp, identity, require_owner, error):
     def dashboard_upload():
         # This fixed, data-only endpoint uses the already installed Mac worker
         # identity. It cannot read sessions or issue CO/report/send commands.
+        if (directory()/'runtime-enabled.json').exists():
+            raise error('Dashboard đã chạy độc lập trên cloud.', 409)
         token = os.getenv('CO_WORKER_TOKEN', '')
         if os.getenv('CO_ENABLED') != '1' or len(token) < 32:
             raise error('Kết nối Mac chưa sẵn sàng.', 503)

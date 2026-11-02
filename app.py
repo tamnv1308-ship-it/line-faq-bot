@@ -35,6 +35,8 @@ import telegram_bridge
 
 
 app = Flask(__name__)
+import taowork_accounts
+taowork_accounts.install(app)
 
 configuration = Configuration(access_token=config.CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(config.CHANNEL_SECRET)

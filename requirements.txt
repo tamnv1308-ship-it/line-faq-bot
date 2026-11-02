@@ -8,3 +8,8 @@ rapidfuzz==3.9.7
 APScheduler==3.10.4
 Pillow==10.4.0
 openpyxl==3.1.5
+
+reportlab>=4,<5
+pypdf>=6,<7
+pypdfium2>=4,<6
+certifi

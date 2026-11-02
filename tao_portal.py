@@ -727,8 +727,6 @@ def install(app, reply, default_users=()):
             db.execute('INSERT INTO co_unlock_events(event,message,created) VALUES(?,?,?)',('tao:'+secrets.token_hex(16),message,time.time()))
         return jsonify(message=message)
 
-    import taowork_dashboard
-    taowork_dashboard.install(bp, identity, require_owner, PortalError)
     app.register_blueprint(bp)
 
     def handle(event):

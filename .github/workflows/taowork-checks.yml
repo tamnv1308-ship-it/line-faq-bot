@@ -30,3 +30,9 @@ jobs:
           bao_tri.kiem_thu.test_idle_status_settle
           bao_tri.kiem_thu.test_submit_capture
           bao_tri.kiem_thu.test_mwg_result_contract -q
+
+      - name: Verify cloud report API and calculation regressions
+        env:
+          TAOWORK_REPORT_ROOT: /tmp/taowork-cloud-report-test
+          PYTHONPATH: cloud_report/bot:cloud_report/work
+        run: python -m unittest discover -s cloud_report/bot -p 'test_*.py' -q
