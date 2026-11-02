@@ -82,17 +82,27 @@ def cli(mode, request_id=''):
             publish()
             return
         if mode == 'probe':
+            atomic(root/'last-error.json', {'operation': mode, 'phase': 'mwg', 'state': 'checking'})
             import ssl
+            import uuid
             import urllib.request
             from mwg_auth import read_state, local_tokens, ORIGIN, NoRedirect
             token = local_tokens(read_state())['access_token']
-            opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+            context = ssl.create_default_context()
+            try:
+                import certifi
+                context.load_verify_locations(certifi.where())
+            except ImportError:
+                pass
+            opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=context))
             req = urllib.request.Request(ORIGIN+'/kb-api/reports/export-templates?report_key=margin-daily',
-                                         headers={'Authorization': 'Bearer '+token, 'Origin': ORIGIN})
+                                         headers={'Authorization': 'Bearer '+token, 'Origin': ORIGIN,
+                                                  'Content-Type': 'application/json', 'X-Request-ID': str(uuid.uuid4())})
             with opener.open(req, timeout=30) as response:
                 data = json.loads(response.read())
             assert any(x.get('name') == 'BI MỖI NGÀY' for x in data.get('templates', []))
             import report_bot as bot
+            atomic(root/'last-error.json', {'operation': mode, 'phase': 'telegram', 'state': 'checking'})
             bot.verify_telegram(bot.read_config())
             atomic(root/'mwg-probe.json', {'ok': True, 'at': datetime.now(timezone.utc).isoformat(),
                                          'telegram_destination_verified': True, 'mac_callback': False})
@@ -250,7 +260,7 @@ def install(bp, identity, same_origin, error):
         if operation == 'status':
             root = initialize()
             result = status(root)
-            for name in ('runtime-heartbeat', 'acceptance', 'mwg-probe', 'verification'):
+            for name in ('runtime-heartbeat', 'acceptance', 'mwg-probe', 'verification', 'last-error'):
                 try:
                     result[name] = json.loads((root/(name+'.json')).read_text())
                 except (OSError, ValueError):
@@ -361,4 +371,15 @@ def hmac_compare(a, b):
 
 
 if __name__ == '__main__':
-    cli(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else '')
+    try:
+        cli(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else '')
+    except Exception as exc:
+        root = initialize()
+        try:
+            detail = json.loads((root/'last-error.json').read_text())
+        except (OSError, ValueError):
+            detail = {}
+        detail.update(operation=sys.argv[1], state='failed', exception=type(exc).__name__,
+                      http_status=getattr(exc, 'code', None))
+        atomic(root/'last-error.json', detail)
+        raise

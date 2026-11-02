@@ -36,3 +36,8 @@ jobs:
           TAOWORK_REPORT_ROOT: /tmp/taowork-cloud-report-test
           PYTHONPATH: cloud_report/bot:cloud_report/work
         run: python -m unittest discover -s cloud_report/bot -p 'test_*.py' -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify cloud login DOM and requests
+        run: node bao_tri/kiem_thu/check_cloud_login.cjs
