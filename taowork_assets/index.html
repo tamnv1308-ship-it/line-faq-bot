@@ -1,0 +1,77 @@
+<!doctype html><html lang="vi" data-theme="midnight"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TáoWork · Báo cáo Apple</title><link rel="stylesheet" href="/tao/dashboard/assets/app.css"><script src="/tao/dashboard/assets/cloud.js" defer></script><script src="/tao/dashboard/assets/app.js" defer></script></head><body class="tao-shell"><aside class="rail"><a class="brand" href="#home">TáoWork</a><nav aria-label="Điều hướng"><a href="#home" data-page="home">Tổng quan</a><a href="#revenue" data-page="revenue">Doanh thu</a><a href="/tao/">Công cụ CO</a><a href="https://apple.taowork.org/app/#bots">BOT trên Mac</a></nav></aside><main><header class="topbar"><span>BÁO CÁO APPLE</span><span id="cloud-status" role="status">Đang đọc dữ liệu đồng bộ…</span></header>    <section id="page-home" class="page">
+      <div class="heading business-heading">
+        <div><p class="eyebrow" id="today">APPLE · MWG</p><h1>Tổng quan Apple</h1></div>
+        <div class="heading-actions"><button id="export-business" class="button primary">Xuất số liệu <span aria-hidden="true">↓</span></button></div>
+      </div>
+
+      <section id="business-overview" aria-label="Tổng quan kinh doanh 2026 và 2025">
+        <div class="business-toolbar">
+          <div class="period-context"><span class="period-label">KỲ ĐỐI CHIẾU</span><strong>2026 <span class="versus">/</span> 2025</strong><span id="comparison-range">Đang đọc kỳ so sánh</span></div>
+          <div class="business-filters"><label class="sr-only" for="business-period">Kỳ so sánh</label><select id="business-period"><option value="ytd">Lũy kế năm</option></select><button id="analytics-refresh" class="icon-button" aria-label="Làm mới dữ liệu kinh doanh">↻</button></div>
+        </div>
+        <section class="executive-stage" aria-label="Kết quả và diễn biến kinh doanh">
+          <div class="executive-main"><div class="executive-label"><span class="status-orb" aria-hidden="true"></span>KẾT QUẢ KINH DOANH <span class="year-chip">2026</span></div><div id="business-kpis" class="business-kpis" aria-live="polite"></div></div>
+          <article class="trend-surface"><div class="chart-heading"><div><p class="chart-overline">DIỄN BIẾN CÙNG KỲ</p><h3 id="trend-title">Xu hướng doanh thu</h3><p id="trend-caption">Toàn ngành Apple · theo tháng</p></div><label><span class="sr-only">Nhóm hàng trong biểu đồ xu hướng</span><select id="trend-group"><option value="all">Toàn ngành Apple</option></select></label></div><div class="chart-legend"><span><i class="legend-current"></i>2026</span><span><i class="legend-previous"></i>2025</span><small id="trend-unit">Tỷ đồng</small></div><div id="trend-chart" class="trend-chart"></div><div id="trend-readout" class="chart-readout" aria-live="polite">Chạm vào điểm để đọc số liệu.</div></article>
+          <div class="executive-takeaway"><span class="takeaway-mark" aria-hidden="true">↗</span><p id="executive-takeaway">Đang đối chiếu động lực tăng trưởng…</p><a href="#portfolio-section">Khám phá nhóm hàng <span aria-hidden="true">↓</span></a></div>
+        </section>
+        <p id="analytics-status" class="data-status" role="status">Đang chuẩn bị dữ liệu so sánh…</p>
+        <section id="portfolio-section" class="portfolio-section" aria-label="Kết quả từng nhóm hàng">
+          <div class="business-section-head"><div><p class="eyebrow">NHÓM HÀNG</p><h2>Kết quả theo nhóm hàng</h2><p id="portfolio-metric-label" class="section-caption">Doanh thu và biến động so với cùng kỳ</p></div><div id="metric-switch" class="segmented" role="group" aria-label="Chỉ tiêu phân tích"><button data-metric="revenue" aria-pressed="true">Doanh thu</button><button data-metric="quantity" aria-pressed="false">Số bán</button></div></div>
+          <div id="category-cards" class="category-cards"></div>
+        </section>
+        <div class="analysis-grid">
+          <section class="surface comparison-surface"><div class="chart-heading"><div><p class="eyebrow">SO SÁNH</p><h2 id="compare-title">Tăng trưởng theo nhóm</h2><p id="compare-caption">Mức thay đổi so với năm 2025</p></div><label><span class="sr-only">Sắp xếp nhóm hàng</span><select id="group-sort"><option value="revenue">Theo quy mô</option><option value="growth">Theo tăng trưởng</option></select></label></div><div id="comparison-mode" class="comparison-modes" role="group" aria-label="Cách so sánh"><button data-compare="growth" aria-pressed="true">Tăng trưởng %</button><button data-compare="scale" aria-pressed="false">Quy mô hai năm</button></div><div id="group-comparison"></div><p class="comparison-note" id="comparison-note">Cùng thang đo để đối chiếu công bằng giữa các nhóm.</p></section>
+          <section class="surface mix-surface"><div class="chart-heading"><div><p class="eyebrow">ĐÓNG GÓP</p><h2>Cơ cấu danh mục</h2><p id="mix-caption">Tỷ trọng doanh thu năm 2026</p></div></div><div id="mix-chart" class="mix-chart"></div><div id="mix-legend" class="mix-legend"></div></section>
+        </div>
+        <section class="insight-panel" aria-label="Nhận định từ số liệu"><div class="insight-heading"><span class="insight-symbol" aria-hidden="true">✦</span><div><p class="eyebrow">GÓC NHÌN ĐIỀU HÀNH</p><h2>Điều đáng chú ý.</h2></div></div><div id="business-insights"></div></section>
+        <details id="business-detail" class="surface business-detail"><summary><span><strong>Bảng đối chiếu đầy đủ</strong><small>Doanh thu · Số bán · Tăng trưởng của từng nhóm</small></span><span class="detail-toggle" aria-hidden="true">＋</span></summary><div class="data-scroll" tabindex="0" role="region" aria-label="Bảng so sánh nhóm hàng, cuộn ngang để xem đủ cột"><table class="business-table"><thead><tr><th scope="col">Nhóm hàng</th><th scope="col">DT 2025 (tỷ)</th><th scope="col">DT 2026 (tỷ)</th><th scope="col">Tăng trưởng DT</th><th scope="col">SL 2025</th><th scope="col">SL 2026</th></tr></thead><tbody id="business-table-body"></tbody></table></div></details>
+        <div class="data-footnote"><span id="business-coverage"></span></div>
+      </section>
+
+    </section>
+    <section id="page-revenue" class="page" hidden>
+      <div class="heading"><div><p class="eyebrow">APPLE · TOÀN HỆ THỐNG</p><h1 id="revenue-title">Theo dõi model</h1><p id="revenue-range">Đang chuẩn bị kỳ đối chiếu…</p></div><div class="heading-actions"><label class="rv-focus-picker" id="revenue-focus-picker" hidden><span class="sr-only">Bảng đang xem</span><select id="revenue-focus-table"><option value="matrix">Model · so sánh</option><option value="weekly">Tuần Apple</option><option value="summary">Tổng hợp &amp; target</option><option value="detail">Chi tiết dòng</option></select></label><button id="revenue-focus" class="button" aria-pressed="false">Vừa màn hình</button><button id="revenue-refresh" class="button">Làm mới</button><button id="revenue-export" class="button primary" disabled>Xuất tất cả dòng ↓</button></div></div>
+      <div class="rv-mode-switch" role="group" aria-label="Cách xem doanh thu"><button id="revenue-mode-matrix" type="button" aria-pressed="true">So sánh theo thời gian</button><button id="revenue-mode-weekly" type="button" aria-pressed="false">Tuần Apple</button></div>
+      <div class="rv-filters rv-matrix-filters">
+        <label id="revenue-month-field" for="revenue-month">Tháng chốt<select id="revenue-month"><option>Đang đọc…</option></select></label>
+        <label id="revenue-year-field" for="revenue-apple-year" hidden>Năm Apple<select id="revenue-apple-year"></select></label>
+        <label id="revenue-quarter-field" for="revenue-apple-quarter" hidden>Quý Apple<select id="revenue-apple-quarter"></select></label>
+        <label for="revenue-group">Nhóm hàng<select id="revenue-group"><option>Tổng quan 6 nhóm hàng</option></select></label>
+        <label for="revenue-model">Model<select id="revenue-model"><option>Tổng quan nhóm hàng</option></select></label>
+      </div>
+      <section class="rv-matrix-panel" id="revenue-matrix-panel" aria-labelledby="revenue-matrix-title">
+        <div class="rv-matrix-heading"><div><h2 id="revenue-matrix-title">Toàn ngành Apple</h2></div><div class="rv-matrix-tools"><div class="rv-metric-switch" role="group" aria-label="Chỉ tiêu so sánh"><button id="revenue-metric-revenue" type="button" aria-pressed="true">Doanh thu</button><button id="revenue-metric-quantity" type="button" aria-pressed="false">Số lượng bán</button></div><div class="rv-matrix-legend" id="revenue-matrix-legend" hidden><span><i class="rv-legend-up" aria-hidden="true"></i>+ Tăng</span><span><i class="rv-legend-down" aria-hidden="true"></i>− Giảm</span><span>— Chưa đủ cơ sở</span></div></div></div>
+        <div class="rv-line-toolbar"><div class="rv-metric-switch" role="group" aria-label="Cách xem so sánh"><button id="revenue-matrix-view-chart" type="button" aria-pressed="true" aria-controls="revenue-line-chart">Biểu đồ đường</button><button id="revenue-matrix-view-table" type="button" aria-pressed="false" aria-controls="revenue-matrix">Bảng số</button></div><label id="revenue-chart-controls" for="revenue-chart-comparison">So sánh<select id="revenue-chart-comparison"><option value="yoy">Tháng · cùng kỳ năm trước</option><option value="mom">Tháng · tháng liền trước</option><option value="qtd">Quý · cùng kỳ năm trước</option><option value="ytd">Lũy kế năm · cùng kỳ</option></select></label></div>
+        <div id="revenue-line-chart" class="rv-line-chart"></div>
+        <div id="revenue-matrix" hidden></div>
+        <nav class="rv-pager" id="revenue-pager" hidden aria-label="Chuyển trang model"><span id="revenue-page-label" role="status"></span><div><button id="revenue-page-prev" type="button" aria-label="Trang model trước">← Trước</button><button id="revenue-page-next" type="button" aria-label="Trang model sau">Sau →</button></div></nav>
+      </section>
+      <section class="rv-week-panel" id="revenue-week-panel" aria-labelledby="revenue-week-title" hidden>
+        <div class="rv-week-heading"><h2 id="revenue-week-title">Sức bán theo tuần Apple</h2><div id="revenue-week-metrics" class="rv-metric-switch" role="group" aria-label="Chỉ tiêu sức bán tuần" hidden><button id="revenue-week-metric-revenue" type="button" aria-pressed="true">Doanh thu</button><button id="revenue-week-metric-quantity" type="button" aria-pressed="false">Số lượng bán</button></div></div>
+        <div class="rv-week-layout" role="group" aria-label="Bố cục tuần Apple"><button id="revenue-week-layout-overview" type="button" aria-pressed="true" aria-controls="revenue-week-overview">Tổng quan 13 tuần</button><button id="revenue-week-layout-chart" type="button" aria-pressed="false" aria-controls="revenue-week-chart">Biểu đồ đường</button><button id="revenue-week-layout-detail" type="button" aria-pressed="false" aria-controls="revenue-week-detail">Chi tiết tuần</button></div>
+        <div id="revenue-week-chart" class="rv-line-chart" hidden></div>
+        <div id="revenue-week-overview"></div>
+        <div id="revenue-week-detail" hidden>
+        <div id="revenue-weekly"></div>
+        </div>
+      </section>
+      <details class="rv-secondary" id="revenue-secondary"><summary><span>Doanh thu nhóm &amp; target tháng</span><span aria-hidden="true">＋</span></summary><div class="rv-secondary-content">
+      <div class="rv-filters rv-secondary-filters">
+        <label for="revenue-view">Kỳ đối chiếu<select id="revenue-view"><option value="yoy">Cùng tháng năm trước</option><option value="mom">So tháng liền trước</option><option value="qtd">Lũy kế quý</option><option value="ytd">Lũy kế năm</option><option value="target">Target &amp; ước tính</option></select></label>
+      </div>
+      <section id="revenue-summary-panel">
+      <div class="rv-kpis" id="revenue-kpis" aria-live="polite"></div>
+      <div class="rv-subheading rv-results-heading"><h2>Kết quả theo nhóm hàng</h2><p>Tỷ đồng · Đã gồm VAT</p><button id="revenue-summary-focus" class="button" type="button">Vừa màn hình</button></div>
+      <div class="rv-summary" id="revenue-summary"></div>
+      <p class="rv-note rv-target-note" id="revenue-target-brief" hidden>Target tháng 10 · Chưa đối chiếu file gốc.</p>
+      </section>
+      <details class="rv-analysis-toggle"><summary>Biểu đồ &amp; nhận định số lượng <span aria-hidden="true">＋</span></summary><div class="rv-analysis"><section class="rv-chart-panel"><div class="rv-chart-heading"><h2 id="revenue-chart-title">Tăng trưởng số lượng</h2></div><div id="revenue-growth-chart"></div></section><section class="rv-insight-panel" aria-label="Nhận định theo số lượng bán"><p class="eyebrow">SỐ LƯỢNG · ĐIỂM CẦN CHÚ Ý</p><div id="revenue-insights"></div></section></div></details>
+      <section id="revenue-detail-panel">
+      <div class="rv-subheading"><h2>Chi tiết dòng sản phẩm</h2><button id="revenue-detail-focus" class="button" type="button">Vừa màn hình</button></div>
+      <div class="rv-detail-toolbar"><label for="revenue-detail-group">Nhóm hàng<select id="revenue-detail-group"></select></label></div>
+      <div id="revenue-details"></div>
+      </section>
+      </div></details>
+      <p class="rv-note" id="revenue-status" role="status">Đang đọc dữ liệu doanh thu…</p>
+    </section>
+</main></body></html>
