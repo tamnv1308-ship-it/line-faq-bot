@@ -1,0 +1,32 @@
+name: TaoWork and CO regression checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Create synthetic destination policy for isolated tests
+        run: python -c "from pathlib import Path; import json; Path('blocked_destinations.json').write_text(json.dumps({'999999999':{'name':'CI fixture','group':'Shop mẹ'}}))"
+      - name: Run authenticated dashboard and CO regression tests
+        run: >-
+          python -m unittest
+          bao_tri.kiem_thu.test_tao_portal
+          bao_tri.kiem_thu.test_taowork_dashboard.DashboardTests
+          bao_tri.kiem_thu.test_taowork_sync
+          bao_tri.kiem_thu.test_default_native_import
+          bao_tri.kiem_thu.test_reuse_import
+          bao_tri.kiem_thu.test_mwg_import_bridge
+          bao_tri.kiem_thu.test_reload_barrier
+          bao_tri.kiem_thu.test_idle_status_settle
+          bao_tri.kiem_thu.test_submit_capture
+          bao_tri.kiem_thu.test_mwg_result_contract -q
