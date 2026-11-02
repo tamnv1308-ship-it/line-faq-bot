@@ -99,10 +99,11 @@ class DashboardTests(unittest.TestCase):
   with patch.object(runtime,'invoke',side_effect=TimeoutError):runtime.run_action(self.root,'report.run',jid)
   with runtime.state_db(self.root) as db:self.assertEqual(db.execute('SELECT state FROM actions').fetchone()[0],'unknown')
 
- def test_cloud_history_reads_without_mac_and_rejects_snapshot(self):
+ def test_cloud_history_serves_published_data_without_mac_and_rejects_snapshot(self):
+  self.assertEqual(self.upload().status_code,200)
   history=self.root/'report/.private/sales-history.sqlite3';history.parent.mkdir(parents=True,exist_ok=True);history.touch()
   self.login()
-  with patch('cloud_analytics.revenue_report.load_revenue',return_value=self.payload['revenue']):
+  with patch('cloud_analytics.revenue_report.load_revenue',side_effect=AssertionError('HTTP must not rebuild history')):
    response=self.call('api/revenue');self.assertEqual(response.status_code,200);self.assertEqual(response.json,self.payload['revenue'])
    self.assertFalse(self.call('api/status').json['mac_required'])
   self.assertEqual(self.upload().status_code,409)
